@@ -6,7 +6,7 @@ import re
 
 app = Flask(__name__)
 
-genai.configure(api_key="AIzaSyCL7Z76SRD7z8sU2AjLJRLEB2CaSN6uVEg")
+genai.configure(api_key="AIzaSyDjj4lPL-lUeGlKCfv4Mi15MfAQsjNpSB8")
 
 PROMPT = """Bu bir nota kağıdı görseli. Görseldeki TÜM notaları sırasıyla oku.
 
