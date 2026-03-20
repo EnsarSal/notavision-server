@@ -7,7 +7,7 @@ import os
 
 app = Flask(__name__)
 
-API_KEY = os.environ.get("OPENROUTER_API_KEY")
+API_KEY = os.environ.get("GEMINI_API_KEY")
 
 PROMPT = """Bu bir nota kagidi gorseli. Gorseldeki TUM notalari sirasiyla oku.
 Her porte satiri icin notalari soldan saga oku.
@@ -44,21 +44,23 @@ def process_sheet():
         b64 = data['image']
 
         resp = httpx.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {API_KEY}",
-                "Content-Type": "application/json"
-            },
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={API_KEY}",
+            headers={"Content-Type": "application/json"},
             json={
-                "model": "google/gemini-2.0-flash-001",
-                "messages": [{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": PROMPT},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
+                "contents": [{
+                    "parts": [
+                        {"text": PROMPT},
+                        {
+                            "inline_data": {
+                                "mime_type": "image/jpeg",
+                                "data": b64
+                            }
+                        }
                     ]
                 }],
-                "max_tokens": 4000
+                "generationConfig": {
+                    "maxOutputTokens": 4000
+                }
             },
             timeout=120
         )
@@ -68,10 +70,11 @@ def process_sheet():
         if "error" in result:
             return jsonify({"success": False, "error": "API hatasi: " + str(result["error"])})
 
-        if "choices" not in result or len(result["choices"]) == 0:
+        candidates = result.get("candidates", [])
+        if not candidates:
             return jsonify({"success": False, "error": "API bos yanit verdi: " + json.dumps(result)[:500]})
 
-        text = result["choices"][0]["message"]["content"].strip()
+        text = candidates[0]["content"]["parts"][0]["text"].strip()
 
         json_match = re.search(r'\{[\s\S]*\}', text)
         if not json_match:
@@ -79,6 +82,7 @@ def process_sheet():
 
         parsed = json.loads(json_match.group())
         notes = parsed.get("notes", [])
+
         if not notes:
             return jsonify({"success": False, "error": "Nota bulunamadi"})
 
@@ -98,6 +102,7 @@ def process_sheet():
                 }
             }
         })
+
     except Exception as e:
         return jsonify({"success": False, "error": "Sunucu hatasi: " + str(e)}), 500
 
