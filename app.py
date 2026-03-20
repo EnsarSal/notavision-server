@@ -58,7 +58,7 @@ def process_sheet():
                     ]
                 }],
                 "generationConfig": {
-                    "maxOutputTokens": 4000
+                    "maxOutputTokens": 8192
                 }
             },
             timeout=120
