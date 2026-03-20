@@ -50,7 +50,7 @@ def process_sheet():
 
         img_bytes = base64.b64decode(data['image'])
 
-        model = genai.GenerativeModel('gemini-2.0-flash-lite')
+        model = genai.GenerativeModel('gemini-1.5-flash')
 
         response = model.generate_content([
             PROMPT,
