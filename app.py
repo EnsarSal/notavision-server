@@ -1,19 +1,19 @@
 from flask import Flask, request, jsonify
-import google.generativeai as genai
+from google import genai
 import base64
 import json
 import re
+import os
 
 app = Flask(__name__)
 
-import os
-genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
-PROMPT = """Bu bir nota kağıdı görseli. Görseldeki TÜM notaları sırasıyla oku.
+PROMPT = """Bu bir nota kagidi gorseli. Gorseldeki TUM notalari sirasiyla oku.
 
-Her porte (satır) için notaları soldan sağa oku.
+Her porte (satir) icin notalari soldan saga oku.
 
-JSON formatında döndür, başka hiçbir şey yazma:
+JSON formatinda dondur, baska hicbir sey yazma:
 
 {
   "notes": [
@@ -26,16 +26,16 @@ JSON formatında döndür, başka hiçbir şey yazma:
 }
 
 Kurallar:
-- pitch: Türkçe nota adı (Do, Re, Mi, Fa, Sol, La, Si)
+- pitch: Turkce nota adi (Do, Re, Mi, Fa, Sol, La, Si)
 - octave: 3, 4 veya 5
-- duration: birlik=4, ikilik=2, dörtlük=1, sekizlik=0.5, onaltılık=0.25
-- staffIndex: hangi porte satırında (0'dan başla)
-- Diyez varsa pitch'e # ekle (örn: "Fa#")
-- Bemol varsa pitch'e b ekle (örn: "Si b")
-- Sus işaretlerini atla
-- staffCount: toplam porte satır sayısı
-- HER notayı atlamadan yaz, tüm porteleri oku
-- Sadece JSON döndür, açıklama yazma"""
+- duration: birlik=4, ikilik=2, dortluk=1, sekizlik=0.5, onaltilik=0.25
+- staffIndex: hangi porte satirinda (0 dan basla)
+- Diyez varsa pitch e # ekle (orn: Fa#)
+- Bemol varsa pitch e b ekle (orn: Sib)
+- Sus isaretlerini atla
+- staffCount: toplam porte satir sayisi
+- HER notayi atlamadan yaz, tum porteleri oku
+- Sadece JSON dondur, aciklama yazma"""
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -46,31 +46,30 @@ def process_sheet():
     try:
         data = request.json
         if not data or 'image' not in data:
-            return jsonify({"success": False, "error": "Görüntü verisi eksik"}), 400
+            return jsonify({"success": False, "error": "Goruntu verisi eksik"}), 400
 
         img_bytes = base64.b64decode(data['image'])
 
-        model = genai.GenerativeModel('gemini-1.5-flash')
-
-        response = model.generate_content([
-            PROMPT,
-            {"mime_type": "image/jpeg", "data": img_bytes}
-        ])
+        response = client.models.generate_content(
+            model='gemini-2.0-flash-lite',
+            contents=[
+                PROMPT,
+                {"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(img_bytes).decode()}}
+            ]
+        )
 
         text = response.text.strip()
-        
-        # JSON'u parse et
+
         json_match = re.search(r'\{[\s\S]*\}', text)
         if not json_match:
-            return jsonify({"success": False, "error": "AI yanıtı parse edilemedi"})
+            return jsonify({"success": False, "error": "AI yaniti parse edilemedi"})
 
         result = json.loads(json_match.group())
         notes = result.get("notes", [])
-        
-        if not notes:
-            return jsonify({"success": False, "error": "Nota bulunamadı"})
 
-        # Confidence ekle
+        if not notes:
+            return jsonify({"success": False, "error": "Nota bulunamadi"})
+
         for n in notes:
             n["confidence"] = 0.9
 
@@ -84,7 +83,7 @@ def process_sheet():
                     "staffCount": result.get("staffCount", 1),
                     "timeSignature": result.get("timeSignature", "4/4"),
                     "clef": result.get("clef", "treble"),
-                    "engine": "gemini-2.0-flash"
+                    "engine": "gemini-2.0-flash-lite"
                 }
             }
         })
