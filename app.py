@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify
-from openai import OpenAI
+import httpx
 import base64
 import json
 import re
@@ -7,10 +7,7 @@ import os
 
 app = Flask(__name__)
 
-client = OpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=os.environ.get("OPENROUTER_API_KEY")
-)
+API_KEY = os.environ.get("OPENROUTER_API_KEY")
 
 PROMPT = """Bu bir nota kagidi gorseli. Gorseldeki TUM notalari sirasiyla oku.
 Her porte satiri icin notalari soldan saga oku.
@@ -46,25 +43,35 @@ def process_sheet():
 
         b64 = data['image']
 
-        response = client.chat.completions.create(
-            model="google/gemini-2.0-flash-001",
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": PROMPT},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
-                ]
-            }],
-            max_tokens=4000
+        resp = httpx.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "google/gemini-2.0-flash-001",
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": PROMPT},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
+                    ]
+                }],
+                "max_tokens": 4000
+            },
+            timeout=120
         )
 
-        text = response.choices[0].message.content.strip()
+        result = resp.json()
+        text = result["choices"][0]["message"]["content"].strip()
+
         json_match = re.search(r'\{[\s\S]*\}', text)
         if not json_match:
             return jsonify({"success": False, "error": "Yanit parse edilemedi"})
 
-        result = json.loads(json_match.group())
-        notes = result.get("notes", [])
+        parsed = json.loads(json_match.group())
+        notes = parsed.get("notes", [])
         if not notes:
             return jsonify({"success": False, "error": "Nota bulunamadi"})
 
@@ -75,17 +82,19 @@ def process_sheet():
             "success": True,
             "data": {
                 "notes": notes,
-                "staves": [{"index": i, "spacing": 12} for i in range(result.get("staffCount", 1))],
+                "staves": [{"index": i, "spacing": 12} for i in range(parsed.get("staffCount", 1))],
                 "metadata": {
                     "noteCount": len(notes),
-                    "staffCount": result.get("staffCount", 1),
-                    "timeSignature": result.get("timeSignature", "4/4"),
-                    "clef": result.get("clef", "treble")
+                    "staffCount": parsed.get("staffCount", 1),
+                    "timeSignature": parsed.get("timeSignature", "4/4"),
+                    "clef": parsed.get("clef", "treble")
                 }
             }
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=10000)
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
