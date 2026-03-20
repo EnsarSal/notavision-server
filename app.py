@@ -7,7 +7,7 @@ import re
 app = Flask(__name__)
 
 import os
-genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+genai.configure(api_key=os.environ.get("AIzaSyCZbR2z03Ug_vWlwoZZGNu35CniporUMAw"))
 
 PROMPT = """Bu bir nota kağıdı görseli. Görseldeki TÜM notaları sırasıyla oku.
 
