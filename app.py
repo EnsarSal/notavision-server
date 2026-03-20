@@ -9,7 +9,7 @@ app = Flask(__name__)
 
 client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
-    api_key=os.environ.get("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")
+    api_key=os.environ.get("OPENROUTER_API_KEY")
 )
 
 PROMPT = """Bu bir nota kagidi gorseli. Gorseldeki TUM notalari sirasiyla oku.
