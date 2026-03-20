@@ -1,6 +1,5 @@
 from flask import Flask, request, jsonify
 import httpx
-import base64
 import json
 import re
 import os
@@ -44,7 +43,7 @@ def process_sheet():
         b64 = data['image']
 
         resp = httpx.post(
-           f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={API_KEY}",
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={API_KEY}",
             headers={"Content-Type": "application/json"},
             json={
                 "contents": [{
@@ -76,21 +75,20 @@ def process_sheet():
 
         text = candidates[0]["content"]["parts"][0]["text"].strip()
 
-       # Markdown kod bloklarını temizle
-text = re.sub(r'```json\s*', '', text)
-text = re.sub(r'```\s*', '', text)
-text = text.strip()
+        text = re.sub(r'```json\s*', '', text)
+        text = re.sub(r'```\s*', '', text)
+        text = text.strip()
 
-json_match = re.search(r'\{[\s\S]*\}', text)
-if not json_match:
-    return jsonify({"success": False, "error": "Yanit parse edilemedi: " + text[:300]})
+        json_match = re.search(r'\{[\s\S]*\}', text)
+        if not json_match:
+            return jsonify({"success": False, "error": "Yanit parse edilemedi: " + text[:300]})
 
-try:
-    parsed = json.loads(json_match.group())
-except json.JSONDecodeError as e:
-    return jsonify({"success": False, "error": "JSON parse hatasi: " + str(e) + " | Yanit: " + text[:300]})
+        try:
+            parsed = json.loads(json_match.group())
+        except json.JSONDecodeError as e:
+            return jsonify({"success": False, "error": "JSON parse hatasi: " + str(e) + " | Yanit: " + text[:300]})
+
         notes = parsed.get("notes", [])
-
         if not notes:
             return jsonify({"success": False, "error": "Nota bulunamadi"})
 
