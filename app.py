@@ -64,11 +64,18 @@ def process_sheet():
         )
 
         result = resp.json()
+
+        if "error" in result:
+            return jsonify({"success": False, "error": "API hatasi: " + str(result["error"])})
+
+        if "choices" not in result or len(result["choices"]) == 0:
+            return jsonify({"success": False, "error": "API bos yanit verdi: " + json.dumps(result)[:500]})
+
         text = result["choices"][0]["message"]["content"].strip()
 
         json_match = re.search(r'\{[\s\S]*\}', text)
         if not json_match:
-            return jsonify({"success": False, "error": "Yanit parse edilemedi"})
+            return jsonify({"success": False, "error": "Yanit parse edilemedi: " + text[:300]})
 
         parsed = json.loads(json_match.group())
         notes = parsed.get("notes", [])
@@ -92,9 +99,7 @@ def process_sheet():
             }
         })
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"success": False, "error": "Sunucu hatasi: " + str(e)}), 500
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000)
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
