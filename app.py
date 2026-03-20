@@ -76,11 +76,19 @@ def process_sheet():
 
         text = candidates[0]["content"]["parts"][0]["text"].strip()
 
-        json_match = re.search(r'\{[\s\S]*\}', text)
-        if not json_match:
-            return jsonify({"success": False, "error": "Yanit parse edilemedi: " + text[:300]})
+       # Markdown kod bloklarını temizle
+text = re.sub(r'```json\s*', '', text)
+text = re.sub(r'```\s*', '', text)
+text = text.strip()
 
-        parsed = json.loads(json_match.group())
+json_match = re.search(r'\{[\s\S]*\}', text)
+if not json_match:
+    return jsonify({"success": False, "error": "Yanit parse edilemedi: " + text[:300]})
+
+try:
+    parsed = json.loads(json_match.group())
+except json.JSONDecodeError as e:
+    return jsonify({"success": False, "error": "JSON parse hatasi: " + str(e) + " | Yanit: " + text[:300]})
         notes = parsed.get("notes", [])
 
         if not notes:
