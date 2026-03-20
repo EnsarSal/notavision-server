@@ -44,7 +44,7 @@ def process_sheet():
         b64 = data['image']
 
         resp = httpx.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key={API_KEY}",
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={API_KEY}",
             headers={"Content-Type": "application/json"},
             json={
                 "contents": [{
