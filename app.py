@@ -113,6 +113,8 @@ def process_sheet():
 
         finish_reason = candidates[0].get("finishReason", "")
         text = candidates[0]["content"]["parts"][0]["text"].strip()
+      # DEBUG - sil sonra
+return jsonify({"success": False, "error": "DEBUG: " + text[:500] + " | FINISH: " + finish_reason})
 
         # Markdown temizle
         text = re.sub(r'```json\s*', '', text)
