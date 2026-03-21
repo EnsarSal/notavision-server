@@ -1,12 +1,11 @@
 from flask import Flask, request, jsonify
 import httpx
-import base64
 import json
 import re
 import os
 
 app = Flask(__name__)
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
 PROMPT = """Bu bir nota kagidi gorseli. Gorseldeki TUM porteleri AYRI AYRI oku. Her portedeki her notayi ATLAMADAN soldan saga yaz.
 
@@ -23,13 +22,12 @@ ARMURE: Bastaki diyez/bemoller tum ilgili notalara uygulanir.
 Her porte icin ayri satir yaz:
 PORTE 1: Do4(1) Re4(0.5) Mi4(0.5) ...
 PORTE 2: Sol4(1) La4(1) ...
-PORTE 3: ...
 
-Sus isaretlerini atla. Bagli notalari ayri ayri yaz. Sadece PORTE satirlarini yaz, baska hicbir sey yazma."""
+Sus isaretlerini atla. Sadece PORTE satirlarini yaz, baska hicbir sey yazma."""
 
 def parse_notes(text):
-    staves = []
     all_notes = []
+    staves = []
     pitch_map = {'do':'Do','re':'Re','mi':'Mi','fa':'Fa','sol':'Sol','la':'La','si':'Si'}
 
     for line in text.strip().split('\n'):
@@ -63,7 +61,7 @@ def parse_notes(text):
             all_notes.append(note)
 
         if notes:
-            staves.append({"index": staff_idx, "noteCount": len(notes), "raw": notes_part})
+            staves.append({"index": staff_idx, "noteCount": len(notes)})
 
     return all_notes, staves
 
@@ -81,24 +79,22 @@ def process_sheet():
         b64 = data['image']
 
         resp = httpx.post(
-            "https://api.anthropic.com/v1/messages",
+            "https://api.openai.com/v1/chat/completions",
             headers={
-                "x-api-key": ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json"
+                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "Content-Type": "application/json"
             },
             json={
-                "model": "claude-opus-4-5",
+                "model": "gpt-4o",
                 "max_tokens": 4096,
                 "messages": [{
                     "role": "user",
                     "content": [
                         {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/jpeg",
-                                "data": b64
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{b64}",
+                                "detail": "high"
                             }
                         },
                         {
@@ -116,10 +112,10 @@ def process_sheet():
         if "error" in result:
             return jsonify({"success": False, "error": "API hatasi: " + str(result["error"])})
 
-        if "content" not in result:
+        if "choices" not in result:
             return jsonify({"success": False, "error": "Bos yanit: " + json.dumps(result)[:300]})
 
-        text = result["content"][0]["text"].strip()
+        text = result["choices"][0]["message"]["content"].strip()
 
         all_notes, staves = parse_notes(text)
 
