@@ -5,10 +5,9 @@ import re
 import os
 
 app = Flask(__name__)
-
 API_KEY = os.environ.get("GEMINI_API_KEY")
 
-PROMPT = """Bu bir nota kagidi gorseli. Gorseldeki TUM notalari sirasiyla oku.
+PROMPT = """Bu bir nota kagidi gorseli. Gorseldeki notalari sirasiyla oku.
 Her porte satiri icin notalari soldan saga oku.
 JSON formatinda dondur, baska hicbir sey yazma:
 {
@@ -26,7 +25,7 @@ Kurallar:
 - staffIndex: hangi porte satirinda (0 dan basla)
 - Diyez varsa # ekle (Fa#), bemol varsa b ekle (Sib)
 - Sus isaretlerini atla
-- HER notayi atlamadan yaz
+- Maksimum 80 nota yaz
 - Sadece JSON dondur"""
 
 @app.route('/health', methods=['GET'])
@@ -58,7 +57,8 @@ def process_sheet():
                     ]
                 }],
                 "generationConfig": {
-                    "maxOutputTokens": 8192
+                    "maxOutputTokens": 8192,
+                    "temperature": 0.1
                 }
             },
             timeout=120
@@ -73,11 +73,20 @@ def process_sheet():
         if not candidates:
             return jsonify({"success": False, "error": "API bos yanit verdi: " + json.dumps(result)[:500]})
 
+        # Finish reason kontrolu
+        finish_reason = candidates[0].get("finishReason", "")
         text = candidates[0]["content"]["parts"][0]["text"].strip()
 
         text = re.sub(r'```json\s*', '', text)
         text = re.sub(r'```\s*', '', text)
         text = text.strip()
+
+        # JSON kesilmisse tamamla
+        if finish_reason == "MAX_TOKENS":
+            # Son gecerli ] ve } ile kapat
+            last_brace = text.rfind('},')
+            if last_brace > 0:
+                text = text[:last_brace+1] + '],"staffCount":1,"timeSignature":"4/4","clef":"treble"}'
 
         json_match = re.search(r'\{[\s\S]*\}', text)
         if not json_match:
@@ -86,7 +95,17 @@ def process_sheet():
         try:
             parsed = json.loads(json_match.group())
         except json.JSONDecodeError as e:
-            return jsonify({"success": False, "error": "JSON parse hatasi: " + str(e) + " | Yanit: " + text[:300]})
+            # JSON bozuksa son virgulden kes ve kapat
+            raw = json_match.group()
+            last_valid = raw.rfind('},')
+            if last_valid > 0:
+                fixed = raw[:last_valid+1] + '],"staffCount":1,"timeSignature":"4/4","clef":"treble"}'
+                try:
+                    parsed = json.loads(fixed)
+                except:
+                    return jsonify({"success": False, "error": "JSON parse hatasi: " + str(e)})
+            else:
+                return jsonify({"success": False, "error": "JSON parse hatasi: " + str(e)})
 
         notes = parsed.get("notes", [])
         if not notes:
