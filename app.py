@@ -7,26 +7,59 @@ import os
 app = Flask(__name__)
 API_KEY = os.environ.get("GEMINI_API_KEY")
 
-PROMPT = """Bu bir nota kagidi gorseli. Gorseldeki notalari sirasiyla oku.
-Her porte satiri icin notalari soldan saga oku.
-JSON formatinda dondur, baska hicbir sey yazma:
+PROMPT = """Bu bir nota kagidi gorseli. Lutfen asagidaki kurallara gore TUM notalari oku:
+
+GOREV:
+- Gorseldeki her porte satirini AYRI AYRI oku (kac porte varsa o kadar grup olustur)
+- Her portedeki notalari SOLDAN SAGA, DOGRU SIRAYA gore yaz
+- Her notanin PITCH (isim), OKTAV, SURE ve hangi PORTE oldugunu belirt
+- Notanin portedeki konumunu (cizgi/aralik) da belirt
+
+NOTA TANIMLAMA:
+- Sol anahtari kullaniliyor
+- Cizgiler asagidan yukari: Mi4, Sol4, Si4, Re5, Fa5
+- Aralidar asagidan yukari: Fa3(alt), La3(alt), Do4, Mi4(aralik), Sol4(aralik), Si4(aralik), Re5(aralik)
+- Porte altindaki ek cizgiler: Do4 (1.ek cizgi), La3, Sol3 vs
+- Porte ustundeki ek cizgiler: La5, Si5 vs
+- Diyez (#) ve bemol (b) isaretlerine dikkat et
+- Armure (bas taraftaki diyez/bemoller) tum notalar icin gecerli
+
+JSON formatinda dondur:
 {
-  "notes": [
-    {"pitch": "Do", "octave": 4, "duration": 1, "staffIndex": 0}
-  ],
-  "staffCount": 1,
+  "title": "eser adi varsa",
+  "clef": "treble",
   "timeSignature": "4/4",
-  "clef": "treble"
+  "keySignature": "1#",
+  "staffCount": 4,
+  "staves": [
+    {
+      "staffIndex": 0,
+      "notes": [
+        {
+          "pitch": "Mi",
+          "octave": 4,
+          "duration": 1,
+          "durationName": "dortluk",
+          "position": "1.cizgi",
+          "accidental": null
+        }
+      ]
+    }
+  ]
 }
-Kurallar:
+
+KURALLAR:
 - pitch: Turkce nota adi (Do, Re, Mi, Fa, Sol, La, Si)
 - octave: 3, 4 veya 5
 - duration: birlik=4, ikilik=2, dortluk=1, sekizlik=0.5, onaltilik=0.25
-- staffIndex: hangi porte satirinda (0 dan basla)
-- Diyez varsa # ekle (Fa#), bemol varsa b ekle (Sib)
+- durationName: birlik/ikilik/dortluk/sekizlik/onaltilik
+- position: notanin portedeki yeri (1.cizgi, 2.aralik, ust ek cizgi vs)
+- accidental: null, "#" veya "b"
 - Sus isaretlerini atla
-- Maksimum 80 nota yaz
-- Sadece JSON dondur"""
+- Bagli notalari (tie/slur) ayri ayri yaz
+- Her portey ayri staffIndex ile ver (0,1,2,3...)
+- Maksimum 120 nota
+- SADECE JSON dondur, baska hicbir sey yazma"""
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -73,7 +106,6 @@ def process_sheet():
         if not candidates:
             return jsonify({"success": False, "error": "API bos yanit verdi: " + json.dumps(result)[:500]})
 
-        # Finish reason kontrolu
         finish_reason = candidates[0].get("finishReason", "")
         text = candidates[0]["content"]["parts"][0]["text"].strip()
 
@@ -83,10 +115,9 @@ def process_sheet():
 
         # JSON kesilmisse tamamla
         if finish_reason == "MAX_TOKENS":
-            # Son gecerli ] ve } ile kapat
             last_brace = text.rfind('},')
             if last_brace > 0:
-                text = text[:last_brace+1] + '],"staffCount":1,"timeSignature":"4/4","clef":"treble"}'
+                text = text[:last_brace+1] + ']}]}'
 
         json_match = re.search(r'\{[\s\S]*\}', text)
         if not json_match:
@@ -95,11 +126,10 @@ def process_sheet():
         try:
             parsed = json.loads(json_match.group())
         except json.JSONDecodeError as e:
-            # JSON bozuksa son virgulden kes ve kapat
             raw = json_match.group()
             last_valid = raw.rfind('},')
             if last_valid > 0:
-                fixed = raw[:last_valid+1] + '],"staffCount":1,"timeSignature":"4/4","clef":"treble"}'
+                fixed = raw[:last_valid+1] + ']}]}'
                 try:
                     parsed = json.loads(fixed)
                 except:
@@ -107,22 +137,29 @@ def process_sheet():
             else:
                 return jsonify({"success": False, "error": "JSON parse hatasi: " + str(e)})
 
-        notes = parsed.get("notes", [])
-        if not notes:
-            return jsonify({"success": False, "error": "Nota bulunamadi"})
+        staves = parsed.get("staves", [])
+        if not staves:
+            return jsonify({"success": False, "error": "Porte bulunamadi"})
 
-        for n in notes:
-            n["confidence"] = 0.9
+        # Tum notaları düz listeye de cevir (geriye donuk uyumluluk)
+        all_notes = []
+        for stave in staves:
+            for note in stave.get("notes", []):
+                note["staffIndex"] = stave["staffIndex"]
+                note["confidence"] = 0.9
+                all_notes.append(note)
 
         return jsonify({
             "success": True,
             "data": {
-                "notes": notes,
-                "staves": [{"index": i, "spacing": 12} for i in range(parsed.get("staffCount", 1))],
+                "notes": all_notes,
+                "staves": [{"index": s["staffIndex"], "spacing": 12, "notes": s.get("notes", [])} for s in staves],
                 "metadata": {
-                    "noteCount": len(notes),
-                    "staffCount": parsed.get("staffCount", 1),
+                    "title": parsed.get("title", ""),
+                    "noteCount": len(all_notes),
+                    "staffCount": parsed.get("staffCount", len(staves)),
                     "timeSignature": parsed.get("timeSignature", "4/4"),
+                    "keySignature": parsed.get("keySignature", ""),
                     "clef": parsed.get("clef", "treble")
                 }
             }
