@@ -4,85 +4,68 @@ import base64
 import json
 import re
 import os
-from PIL import Image
-import io
 
 app = Flask(__name__)
-API_KEY = os.environ.get("GEMINI_API_KEY")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 
-PROMPT = """Bu bir nota kagidi gorseli. Sadece bu portedeki notalari soldan saga oku.
+PROMPT = """Bu bir nota kagidi gorseli. Gorseldeki TUM porteleri AYRI AYRI oku. Her portedeki her notayi ATLAMADAN soldan saga yaz.
+
 Her notayi su formatta yaz: IsimOktav(sure)
 Ornek: Do4(1) Re4(0.5) Mib4(0.5) Sol4(1) Fa4#(2)
 
-SOL ANAHTARI: Do4=ek cizgi, Re4=1.aralik, Mi4=1.cizgi, Fa4=1-2aralik, Sol4=2.cizgi, La4=2-3aralik, Si4=3.cizgi, Do5=3-4aralik, Re5=4.cizgi, Mi5=4-5aralik
-SURELER: 4=birlik, 2=ikilik, 1=dortluk, 0.5=sekizlik, 0.25=onaltilik
+SOL ANAHTARI POZISYONLARI:
+Do4=ek cizgi, Re4=1.aralik, Mi4=1.cizgi, Fa4=1-2aralik, Sol4=2.cizgi, La4=2-3aralik, Si4=3.cizgi, Do5=3-4aralik, Re5=4.cizgi, Mi5=4-5aralik, Fa5=5.cizgi
+
+SURELER: 4=birlik, 2=ikilik, 1=dortluk, 0.5=sekizlik, 0.25=onaltilik, 1.5=noktalidortluk
+
 ARMURE: Bastaki diyez/bemoller tum ilgili notalara uygulanir.
 
-SADECE nota listesini yaz, baska hicbir sey yazma. Sus isaretlerini atla."""
+Her porte icin ayri satir yaz:
+PORTE 1: Do4(1) Re4(0.5) Mi4(0.5) ...
+PORTE 2: Sol4(1) La4(1) ...
+PORTE 3: ...
 
-def detect_staff_count(img):
-    w, h = img.size
-    ratio = h / w
-    if ratio < 0.5:
-        return 2
-    elif ratio < 0.8:
-        return 3
-    elif ratio < 1.2:
-        return 4
-    else:
-        return 5
+Sus isaretlerini atla. Bagli notalari ayri ayri yaz. Sadece PORTE satirlarini yaz, baska hicbir sey yazma."""
 
-def crop_staff(img, staff_idx, total_staffs):
-    w, h = img.size
-    staff_h = h / total_staffs
-    top = int(staff_idx * staff_h)
-    bottom = int((staff_idx + 1) * staff_h)
-    top = max(0, top - 10)
-    bottom = min(h, bottom + 10)
-    return img.crop((0, top, w, bottom))
-
-def image_to_b64(img):
-    buf = io.BytesIO()
-    img.save(buf, format='JPEG', quality=90)
-    return base64.b64encode(buf.getvalue()).decode()
-
-def ask_gemini(b64):
-    resp = httpx.post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={API_KEY}",
-        headers={"Content-Type": "application/json"},
-        json={
-            "contents": [{"parts": [
-                {"text": PROMPT},
-                {"inline_data": {"mime_type": "image/jpeg", "data": b64}}
-            ]}],
-            "generationConfig": {"maxOutputTokens": 2048, "temperature": 0.1}
-        },
-        timeout=60
-    )
-    result = resp.json()
-    if "error" in result:
-        return None, str(result["error"])
-    candidates = result.get("candidates", [])
-    if not candidates:
-        return None, "Bos yanit"
-    return candidates[0]["content"]["parts"][0]["text"].strip(), None
-
-def parse_notes(text, staff_idx):
-    notes = []
+def parse_notes(text):
+    staves = []
+    all_notes = []
     pitch_map = {'do':'Do','re':'Re','mi':'Mi','fa':'Fa','sol':'Sol','la':'La','si':'Si'}
-    for m in re.finditer(r'([A-Za-z]+)(\d)([#b]?)\(([0-9.]+)\)', text):
-        pitch = pitch_map.get(m.group(1).lower())
-        if not pitch:
+
+    for line in text.strip().split('\n'):
+        line = line.strip()
+        if not line.upper().startswith('PORTE'):
             continue
-        notes.append({
-            "pitch": pitch,
-            "octave": int(m.group(2)),
-            "duration": float(m.group(4)),
-            "accidental": m.group(3) or None,
-            "staffIndex": staff_idx,
-            "confidence": 0.9
-        })
-    return notes
+
+        colon = line.find(':')
+        if colon < 0:
+            continue
+
+        staff_num = re.search(r'\d+', line[:colon])
+        staff_idx = int(staff_num.group()) - 1 if staff_num else len(staves)
+
+        notes_part = line[colon+1:].strip()
+        notes = []
+
+        for m in re.finditer(r'([A-Za-z]+)(\d)([#b]?)\(([0-9.]+)\)', notes_part):
+            pitch = pitch_map.get(m.group(1).lower())
+            if not pitch:
+                continue
+            note = {
+                "pitch": pitch,
+                "octave": int(m.group(2)),
+                "duration": float(m.group(4)),
+                "accidental": m.group(3) or None,
+                "staffIndex": staff_idx,
+                "confidence": 0.9
+            }
+            notes.append(note)
+            all_notes.append(note)
+
+        if notes:
+            staves.append({"index": staff_idx, "noteCount": len(notes), "raw": notes_part})
+
+    return all_notes, staves
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -95,38 +78,63 @@ def process_sheet():
         if not data or 'image' not in data:
             return jsonify({"success": False, "error": "Goruntu eksik"}), 400
 
-        img_bytes = base64.b64decode(data['image'])
-        img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
+        b64 = data['image']
 
-        staff_count = data.get('staffCount') or detect_staff_count(img)
+        resp = httpx.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json"
+            },
+            json={
+                "model": "claude-opus-4-5",
+                "max_tokens": 4096,
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/jpeg",
+                                "data": b64
+                            }
+                        },
+                        {
+                            "type": "text",
+                            "text": PROMPT
+                        }
+                    ]
+                }]
+            },
+            timeout=120
+        )
 
-        all_notes = []
-        staves_info = []
+        result = resp.json()
 
-        for i in range(staff_count):
-            cropped = crop_staff(img, i, staff_count)
-            b64 = image_to_b64(cropped)
+        if "error" in result:
+            return jsonify({"success": False, "error": "API hatasi: " + str(result["error"])})
 
-            text, err = ask_gemini(b64)
-            if err or not text:
-                continue
+        if "content" not in result:
+            return jsonify({"success": False, "error": "Bos yanit: " + json.dumps(result)[:300]})
 
-            notes = parse_notes(text, i)
-            if notes:
-                all_notes.extend(notes)
-                staves_info.append({"index": i, "noteCount": len(notes), "raw": text})
+        text = result["content"][0]["text"].strip()
+
+        all_notes, staves = parse_notes(text)
 
         if not all_notes:
-            return jsonify({"success": False, "error": "Nota bulunamadi"})
+            return jsonify({"success": False, "error": "Nota bulunamadi. Ham yanit: " + text[:300]})
 
         return jsonify({
             "success": True,
             "data": {
                 "notes": all_notes,
-                "staves": staves_info,
+                "rawText": text,
+                "staves": staves,
                 "metadata": {
                     "noteCount": len(all_notes),
-                    "staffCount": len(staves_info),
+                    "staffCount": len(staves),
                     "timeSignature": "4/4",
                     "clef": "treble"
                 }
