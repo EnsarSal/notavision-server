@@ -7,30 +7,87 @@ import os
 app = Flask(__name__)
 API_KEY = os.environ.get("GEMINI_API_KEY")
 
-PROMPT = """Nota kagidi gorseli. TUM porte satirlarini oku. Kompakt JSON dondur.
+PROMPT = """Bu bir nota kagidi gorseli. Asagidaki formatta yaz.
 
 SOL ANAHTARI POZISYONLARI:
-Do4=ek cizgi, Re4=1.aralik, Mi4=1.cizgi, Fa4=1-2aralik, Sol4=2.cizgi, La4=2-3aralik, Si4=3.cizgi, Do5=3-4aralik, Re5=4.cizgi, Mi5=4-5aralik, Fa5=5.cizgi
+Do4=ek cizgi alti, Re4=1.aralik, Mi4=1.cizgi, Fa4=1-2aralik, Sol4=2.cizgi, La4=2-3aralik, Si4=3.cizgi, Do5=3-4aralik, Re5=4.cizgi, Mi5=4-5aralik, Fa5=5.cizgi
+Ek cizgiler: Do3, Re3, Mi3 (porte alti), Sol5, La5 (porte ustu)
 
-SURE: 0.25=onaltilik, 0.5=sekizlik, 1=dortluk, 2=ikilik, 4=birlik
+SURE KODLARI: 4=birlik, 2=ikilik, 1=dortluk, 0.5=sekizlik, 0.25=onaltilik, 1.5=noktalidortluk, 3=noktaliikilik
 
 ARMURE: Bastaki diyez/bemoller tum ilgili notalara uygulanir.
 
-SADECE bu JSON formatini dondur (baska hicbir sey yazma, markdown kullanma):
-{"title":"","time":"4/4","key":"1#","staves":[{"s":0,"n":[{"p":"Mi","o":4,"d":1,"a":null}]},{"s":1,"n":[{"p":"Do","o":5,"d":0.5,"a":null}]}]}
+CIKTI FORMATI - Her porte icin bir satir:
+PORTE 1: Re4(1) Do4(0.5) Mi4b(0.5) Sol4(1) Fa4#(2)
+PORTE 2: Si4(1) Do5(0.5) Re5(1) Mi5(0.5)
+...
 
 KURALLAR:
-- p: Do/Re/Mi/Fa/Sol/La/Si
-- o: 3/4/5
-- d: 0.25/0.5/1/1.5/2/3/4
-- a: null veya "#" veya "b"
-- Sus isaretlerini atla
-- Her porte ayri s degeri (0dan basla)
-- SADECE JSON, markdown yok"""
+- Her nota: IsimOktav(sure) - ornek: Do4(1) Re5(0.5) Fa4#(1) Mib4(0.5)
+- Diyez: # notanin hemen arkasina - Fa4#
+- Bemol: b notanin hemen arkasina - Mib4
+- Sus isaretlerini ATLA
+- Bagli notalari (tie) AYRI AYRI yaz
+- Tum porteleri yaz, hic atlama
+- Sadece PORTE satirlarini yaz, baska hicbir sey yazma"""
 
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({"status": "ok"})
+
+def parse_note_text(text):
+    staves = []
+    lines = text.strip().split('\n')
+    
+    for line in lines:
+        line = line.strip()
+        if not line.startswith('PORTE'):
+            continue
+        
+        # PORTE 1: ... kismini ayir
+        colon = line.find(':')
+        if colon < 0:
+            continue
+        
+        staff_part = line[:colon]
+        notes_part = line[colon+1:].strip()
+        
+        # Porte indexi al
+        staff_num = re.search(r'\d+', staff_part)
+        staff_idx = int(staff_num.group()) - 1 if staff_num else len(staves)
+        
+        # Notalari parse et: Do4(1) Re4#(0.5) Mib5(2) ...
+        note_pattern = re.finditer(r'([A-Za-z]+)(\d+)([#b]?)\(([0-9.]+)\)', notes_part)
+        
+        notes = []
+        pitch_map = {
+            'do': 'Do', 're': 'Re', 'mi': 'Mi', 'fa': 'Fa',
+            'sol': 'Sol', 'la': 'La', 'si': 'Si'
+        }
+        
+        for m in note_pattern:
+            pitch_raw = m.group(1).lower()
+            octave = int(m.group(2))
+            accidental = m.group(3) if m.group(3) else None
+            duration = float(m.group(4))
+            
+            pitch = pitch_map.get(pitch_raw)
+            if not pitch:
+                continue
+            
+            notes.append({
+                "pitch": pitch,
+                "octave": octave,
+                "duration": duration,
+                "accidental": accidental if accidental else None,
+                "staffIndex": staff_idx,
+                "confidence": 0.9
+            })
+        
+        if notes:
+            staves.append({"staffIndex": staff_idx, "notes": notes})
+    
+    return staves
 
 @app.route('/process', methods=['POST'])
 def process_sheet():
@@ -68,71 +125,27 @@ def process_sheet():
         if not candidates:
             return jsonify({"success": False, "error": "API bos yanit: " + json.dumps(result)[:300]})
 
-        finish_reason = candidates[0].get("finishReason", "")
         text = candidates[0]["content"]["parts"][0]["text"].strip()
 
-        # Markdown temizle
-        text = re.sub(r'```json\s*', '', text)
-        text = re.sub(r'```\s*', '', text)
-        text = text.strip()
+        staves = parse_note_text(text)
 
-        # Kesik JSON tamir et
-        if finish_reason == "MAX_TOKENS" or not text.rstrip().endswith('}'):
-            last = text.rfind(',"a"')
-            if last > 0:
-                end = text.find('}', last)
-                if end > 0:
-                    text = text[:end+1] + ']}]}'
-
-        json_match = re.search(r'\{[\s\S]*\}', text)
-        if not json_match:
-            return jsonify({"success": False, "error": "JSON bulunamadi: " + text[:200]})
-
-        try:
-            parsed = json.loads(json_match.group())
-        except json.JSONDecodeError:
-            raw = json_match.group()
-            last = raw.rfind(',"a"')
-            if last > 0:
-                end = raw.find('}', last)
-                if end > 0:
-                    try:
-                        parsed = json.loads(raw[:end+1] + ']}]}')
-                    except:
-                        return jsonify({"success": False, "error": "JSON tamir edilemedi"})
-            else:
-                return jsonify({"success": False, "error": "JSON parse hatasi"})
-
-        staves = parsed.get("staves", [])
         if not staves:
-            return jsonify({"success": False, "error": "Porte bulunamadi"})
+            return jsonify({"success": False, "error": "Nota bulunamadi. Ham yanit: " + text[:300]})
 
         all_notes = []
         for stave in staves:
-            for note in stave.get("n", []):
-                all_notes.append({
-                    "pitch": note.get("p", "Do"),
-                    "octave": note.get("o", 4),
-                    "duration": note.get("d", 1),
-                    "accidental": note.get("a"),
-                    "staffIndex": stave["s"],
-                    "confidence": 0.9
-                })
-
-        if not all_notes:
-            return jsonify({"success": False, "error": "Nota bulunamadi"})
+            all_notes.extend(stave["notes"])
 
         return jsonify({
             "success": True,
             "data": {
                 "notes": all_notes,
-                "staves": [{"index": s["s"], "noteCount": len(s.get("n", []))} for s in staves],
+                "rawText": text,
+                "staves": [{"index": s["staffIndex"], "noteCount": len(s["notes"])} for s in staves],
                 "metadata": {
-                    "title": parsed.get("title", ""),
                     "noteCount": len(all_notes),
                     "staffCount": len(staves),
-                    "timeSignature": parsed.get("time", "4/4"),
-                    "keySignature": parsed.get("key", ""),
+                    "timeSignature": "4/4",
                     "clef": "treble"
                 }
             }
