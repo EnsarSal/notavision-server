@@ -29,7 +29,6 @@ SOL ANAHTARI NOTA POZISYONLARI (asagidan yukari):
 - Porte ustu 1. ek cizgi: La5
 
 ARMURE (anahtar isaretleri): Porte basindaki diyez/bemoller TUM ilgili notalara uygulanir.
-Ornek: 1 diyez armurde ise FA notalari otomatik FA# olur (ayrica isaretlenmese bile).
 
 SURE DEGERLERI:
 - Dolu bas + 4 kuyruk = onaltilik (0.25)
@@ -51,12 +50,6 @@ CIKTI FORMATI - Sadece bu JSON'u dondur, baska hicbir sey yazma:
       "notes": [
         {"pitch": "Mi", "octave": 4, "duration": 1, "accidental": null}
       ]
-    },
-    {
-      "staffIndex": 1,
-      "notes": [
-        {"pitch": "Do", "octave": 5, "duration": 0.5, "accidental": null}
-      ]
     }
   ]
 }
@@ -65,9 +58,8 @@ KURALLAR:
 - pitch: SADECE Turkce (Do/Re/Mi/Fa/Sol/La/Si)
 - octave: 3, 4 veya 5
 - duration: 0.25 / 0.5 / 1 / 1.5 / 2 / 3 / 4
-- accidental: null, "#" veya "b" (armurden gelen isaretler dahil)
+- accidental: null, "#" veya "b"
 - Sus/es isaretlerini ATLA
-- Bagli notalari (tie) AYRI AYRI yaz
 - Her porte icin AYRI staffIndex kullan (0'dan basla)
 - SADECE JSON dondur"""
 
@@ -113,84 +105,11 @@ def process_sheet():
 
         finish_reason = candidates[0].get("finishReason", "")
         text = candidates[0]["content"]["parts"][0]["text"].strip()
-      # DEBUG - sil sonra
-return jsonify({"success": False, "error": "DEBUG: " + text[:500] + " | FINISH: " + finish_reason})
 
-        # Markdown temizle
-        text = re.sub(r'```json\s*', '', text)
-        text = re.sub(r'```\s*', '', text)
-        text = text.strip()
-
-        # Kesik JSON'u tamir et
-        if finish_reason == "MAX_TOKENS" or not text.rstrip().endswith('}'):
-            # Son tam notayi bul
-            last_note = text.rfind('"accidental"')
-            if last_note > 0:
-                end = text.find('}', last_note)
-                if end > 0:
-                    text = text[:end+1] + ']}]}'
-
-        json_match = re.search(r'\{[\s\S]*\}', text)
-        if not json_match:
-            return jsonify({"success": False, "error": "JSON bulunamadi: " + text[:200]})
-
-        try:
-            parsed = json.loads(json_match.group())
-        except json.JSONDecodeError:
-            # Agresif tamir: son gecerli nota objesinden kes
-            raw = json_match.group()
-            last_note = raw.rfind('"accidental"')
-            if last_note > 0:
-                end = raw.find('}', last_note)
-                if end > 0:
-                    fixed = raw[:end+1] + ']}]}'
-                    try:
-                        parsed = json.loads(fixed)
-                    except:
-                        return jsonify({"success": False, "error": "JSON tamir edilemedi"})
-            else:
-                return jsonify({"success": False, "error": "JSON parse hatasi"})
-
-        staves = parsed.get("staves", [])
-        if not staves:
-            return jsonify({"success": False, "error": "Porte bulunamadi"})
-
-        # Tum notaları düz listeye cevir
-        all_notes = []
-        for stave in staves:
-            for note in stave.get("notes", []):
-                all_notes.append({
-                    "pitch": note.get("pitch", "Do"),
-                    "octave": note.get("octave", 4),
-                    "duration": note.get("duration", 1),
-                    "accidental": note.get("accidental"),
-                    "staffIndex": stave["staffIndex"],
-                    "confidence": 0.9
-                })
-
-        if not all_notes:
-            return jsonify({"success": False, "error": "Nota bulunamadi"})
-
+        # DEBUG: Ham yaniti dondur
         return jsonify({
-            "success": True,
-            "data": {
-                "notes": all_notes,
-                "staves": [
-                    {
-                        "index": s["staffIndex"],
-                        "noteCount": len(s.get("notes", []))
-                    }
-                    for s in staves
-                ],
-                "metadata": {
-                    "title": parsed.get("title", ""),
-                    "noteCount": len(all_notes),
-                    "staffCount": len(staves),
-                    "timeSignature": parsed.get("timeSignature", "4/4"),
-                    "keySignature": parsed.get("keySignature", ""),
-                    "clef": "treble"
-                }
-            }
+            "success": False,
+            "error": "DEBUG finish:" + finish_reason + " | " + text[:800]
         })
 
     except Exception as e:
