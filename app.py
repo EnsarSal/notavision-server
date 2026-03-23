@@ -11,42 +11,44 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
 
 def build_prompt(staff_count):
-    return f"""Bu bir nota kagidi gorseli. Gorselde TAM OLARAK {staff_count} PORTE var.
+    return f"""You are a music sheet reader. This image contains exactly {staff_count} staff lines with Turkish solfege syllables written below each note (do, re, mi, fa, sol, la, si, sib, fa#, es, etc.).
 
-Her portedeki notalari soldan saga EKSIKSIZ oku. Hic atlama.
+YOUR TASK: Read ALL notes from ALL {staff_count} staves, left to right, without skipping any.
 
-ONCELIK: Notalarin ALTINDAKI SOLFEJ YAZILARINI oku. Bu yazilar en dogru kaynaktir.
-- "es" = Mib (Mi bemol)
-- "sib" = Sib (Si bemol)  
-- "fa#" = Fa# (Fa diyez)
-- "do#" = Do# (Do diyez)
-- "sol#" = Sol# (Sol diyez)
-- Alt cizgi (la__) = o nota daha uzun surer, ayni notayi yaz ama suresini artir
+READING PRIORITY:
+1. Read the SOLFEGE TEXT written below the notes (most accurate source)
+2. If no solfege text, determine pitch from note head position on staff
 
-ARMUR: Gorselin solundaki diyez/bemoller tum parcaya uygulanir. Ayrica belirtilmemis olsa bile.
+SOLFEGE MAPPINGS:
+- "es" or "eb" = Mib (E flat)
+- "sib" = Sib (B flat)
+- "fa#" = Fa# (F sharp)
+- "do#" = Do# (C sharp)
+- "sol#" = Sol# (G sharp)
+- Underline (la__) = same note held longer, increase duration
 
-SURELER:
-- Birlik = 4
-- Ikilik = 2
-- Dortluk = 1
-- Sekizlik = 0.5
-- Onaltilik = 0.25
-- Noktalı dortluk = 1.5
-- Noktalı ikilik = 3
+KEY SIGNATURE: Apply sharps/flats shown at the beginning to all relevant notes throughout.
 
-FORMAT - SADECE BUNU YAZ, baska hicbir sey yazma:
-PORTE 1: Do4(1) Re4(0.5) Mib4(0.5) ...
-PORTE 2: Sib4(0.5) Do5(1) ...
+DURATIONS (determine from note head appearance):
+- Whole note = 4
+- Half note = 2
+- Quarter note = 1
+- Eighth note = 0.5
+- Sixteenth note = 0.25
+- Dotted quarter = 1.5
+- Dotted half = 3
+
+OUTPUT FORMAT - write ONLY this, nothing else:
+PORTE 1: Do4(1) Re4(0.5) Mib4(0.5) Sol4(1) ...
+PORTE 2: Sib4(0.5) Do5(1) Re5(0.5) ...
 PORTE 3: ...
 PORTE 4: ...
 
-KRITIK: {staff_count} porte satirinin HEPSINI yaz. Hic birini atlama."""
+IMPORTANT: You MUST write all {staff_count} PORTE lines. Do not skip any staff."""
 
 
 def detect_staff_count(img):
-    """Goruntudeki yaklasik porte sayisini tespit et."""
     w, h = img.size
-    # Basit heuristik: yukseklik / genislik oranina gore
     ratio = h / w
     if ratio < 0.4:
         return 1
@@ -94,7 +96,7 @@ def ask_gpt(b64, staff_count):
     if "error" in result:
         return None, str(result["error"])
     if "choices" not in result:
-        return None, "Bos yanit"
+        return None, "Empty response"
     return result["choices"][0]["message"]["content"].strip(), None
 
 
@@ -158,18 +160,16 @@ def process_sheet():
         img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
         w, h = img.size
 
-        # Porte sayisini tespit et
         staff_count = detect_staff_count(img)
 
-        # Cok buyukse boyutu kucult ama bolme
         max_dim = 2000
         if w > max_dim or h > max_dim:
             scale = min(max_dim / w, max_dim / h)
             img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
 
         final_b64 = image_to_b64(img)
-
         text, err = ask_gpt(final_b64, staff_count)
+
         if err:
             return jsonify({"success": False, "error": "API hatasi: " + err})
         if not text:
