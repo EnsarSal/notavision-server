@@ -9,47 +9,65 @@ import io
 app = Flask(__name__)
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
-PROMPT = """Bu bir nota kagidi gorseli. Gorselde her notanin ALTINDA solfej yazilari var (do, re, mi, fa, sol, la, si, sib, fa# gibi).
 
-GOREV: Her portedeki notalari soldan saga EKSIKSIZ oku.
+def build_prompt(staff_count):
+    return f"""Bu bir nota kagidi gorseli. Gorselde TAM OLARAK {staff_count} PORTE var.
 
-ONCELIK SIRASI:
-1. Once altindaki SOLFEJ YAZILARINI oku (en dogru kaynak)
-2. Solfej yoksa nota baslarinin porte uzerindeki POZISYONUNA bak
+Her portedeki notalari soldan saga EKSIKSIZ oku. Hic atlama.
 
-SOLFEJ OKUMA KURALLARI:
-- "es" veya "eb" = Mi bemol (Mib)
-- "sib" = Si bemol
-- "fa#" = Fa diyez
-- "do#" = Do diyez
-- Alt cizgi (la__) = uzatma, ayni notayi daha uzun sur
-- Baglama yayini = ayni nota, suresi uzar
+ONCELIK: Notalarin ALTINDAKI SOLFEJ YAZILARINI oku. Bu yazilar en dogru kaynaktir.
+- "es" = Mib (Mi bemol)
+- "sib" = Sib (Si bemol)  
+- "fa#" = Fa# (Fa diyez)
+- "do#" = Do# (Do diyez)
+- "sol#" = Sol# (Sol diyez)
+- Alt cizgi (la__) = o nota daha uzun surer, ayni notayi yaz ama suresini artir
 
-SURELER - nota basina gore belirle:
-- Birlik (dolu olmayan, sapsiz) = 4
-- Ikilik (dolu olmayan, sapli) = 2
-- Dortluk (dolu, sapli) = 1
-- Sekizlik (dolu, sapli, bayrakli) = 0.5
+ARMUR: Gorselin solundaki diyez/bemoller tum parcaya uygulanir. Ayrica belirtilmemis olsa bile.
+
+SURELER:
+- Birlik = 4
+- Ikilik = 2
+- Dortluk = 1
+- Sekizlik = 0.5
 - Onaltilik = 0.25
 - Noktalı dortluk = 1.5
 - Noktalı ikilik = 3
 
-ARMUR: Bastaki diyez/bemoller tum ilgili notalara uygulanir.
+FORMAT - SADECE BUNU YAZ, baska hicbir sey yazma:
+PORTE 1: Do4(1) Re4(0.5) Mib4(0.5) ...
+PORTE 2: Sib4(0.5) Do5(1) ...
+PORTE 3: ...
+PORTE 4: ...
 
-Her porte icin ayri satir yaz. SADECE su formatta, baska hicbir sey yazma:
+KRITIK: {staff_count} porte satirinin HEPSINI yaz. Hic birini atlama."""
 
-PORTE 1: Do4(1) Re4(0.5) Mib4(0.5) Sol4(1) ...
-PORTE 2: Sib4(0.5) Do5(0.5) Re5(0.5) ...
-PORTE 3: ..."""
+
+def detect_staff_count(img):
+    """Goruntudeki yaklasik porte sayisini tespit et."""
+    w, h = img.size
+    # Basit heuristik: yukseklik / genislik oranina gore
+    ratio = h / w
+    if ratio < 0.4:
+        return 1
+    elif ratio < 0.7:
+        return 2
+    elif ratio < 1.0:
+        return 3
+    elif ratio < 1.4:
+        return 4
+    else:
+        return 5
 
 
 def image_to_b64(img):
     buf = io.BytesIO()
-    img.save(buf, format='JPEG', quality=90)
+    img.save(buf, format='JPEG', quality=92)
     return base64.b64encode(buf.getvalue()).decode()
 
 
-def ask_gpt(b64):
+def ask_gpt(b64, staff_count):
+    prompt = build_prompt(staff_count)
     resp = httpx.post(
         "https://api.openai.com/v1/chat/completions",
         headers={
@@ -66,7 +84,7 @@ def ask_gpt(b64):
                         "type": "image_url",
                         "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "high"}
                     },
-                    {"type": "text", "text": PROMPT}
+                    {"type": "text", "text": prompt}
                 ]
             }]
         },
@@ -80,7 +98,7 @@ def ask_gpt(b64):
     return result["choices"][0]["message"]["content"].strip(), None
 
 
-def parse_notes(text, staff_offset=0):
+def parse_notes(text):
     all_notes = []
     staves = []
     pitch_map = {
@@ -97,7 +115,7 @@ def parse_notes(text, staff_offset=0):
             continue
 
         staff_num = re.search(r'\d+', line[:colon])
-        staff_idx = (int(staff_num.group()) - 1 + staff_offset) if staff_num else len(staves)
+        staff_idx = (int(staff_num.group()) - 1) if staff_num else len(staves)
         notes_part = line[colon + 1:].strip()
         notes = []
 
@@ -136,24 +154,24 @@ def process_sheet():
             return jsonify({"success": False, "error": "Goruntu eksik"}), 400
 
         b64 = data['image']
-
-        # Görseli küçült ama BÖLME — direkt gönder
         img_bytes = base64.b64decode(b64)
         img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
         w, h = img.size
 
-        # Çok büyükse boyutu küçült ama oranı koru
+        # Porte sayisini tespit et
+        staff_count = detect_staff_count(img)
+
+        # Cok buyukse boyutu kucult ama bolme
         max_dim = 2000
         if w > max_dim or h > max_dim:
-            ratio = min(max_dim / w, max_dim / h)
-            img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
+            scale = min(max_dim / w, max_dim / h)
+            img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
 
         final_b64 = image_to_b64(img)
 
-        text, err = ask_gpt(final_b64)
+        text, err = ask_gpt(final_b64, staff_count)
         if err:
             return jsonify({"success": False, "error": "API hatasi: " + err})
-
         if not text:
             return jsonify({"success": False, "error": "GPT bos yanit verdi."})
 
@@ -166,7 +184,7 @@ def process_sheet():
                 "debug_raw": text
             })
 
-        staff_count = len(set(n.get("staffIndex", 0) for n in all_notes))
+        actual_staff_count = len(set(n.get("staffIndex", 0) for n in all_notes))
 
         return jsonify({
             "success": True,
@@ -175,7 +193,7 @@ def process_sheet():
                 "staves": all_staves,
                 "metadata": {
                     "noteCount": len(all_notes),
-                    "staffCount": staff_count,
+                    "staffCount": actual_staff_count,
                     "timeSignature": "4/4",
                     "clef": "treble",
                     "rawText": text
