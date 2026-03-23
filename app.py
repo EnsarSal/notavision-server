@@ -9,53 +9,43 @@ import io
 app = Flask(__name__)
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
-PROMPT = """Bu bir nota kagidi gorseli. Gorseldeki TUM porteleri AYRI AYRI ve EKSIKSIZ oku.
+PROMPT = """Bu bir nota kagidi gorseli. Gorselde her notanin ALTINDA solfej yazilari var (do, re, mi, fa, sol, la, si, sib, fa# gibi).
 
-Her portedeki her notayi soldan saga, ATLAMADAN yaz.
+GOREV: Her portedeki notalari soldan saga EKSIKSIZ oku.
 
-FORMAT: IsimOktav(sure)
-ORNEKLER: Do4(1) Re4(0.5) Mib4(0.5) Sol4(1) Fa4#(2) La4(1.5)
+ONCELIK SIRASI:
+1. Oncce altindaki SOLFEJ YAZILARINI oku (en dogru kaynak)
+2. Solfej yoksa nota baslarinin porte uzerindeki POZISYONUNA bak
 
-SOL ANAHTARI NOTA POZISYONLARI (ezberle):
-- Ek cizgi altinda = Do4
-- 1. aralik = Re4
-- 1. cizgi = Mi4
-- 1-2. aralik = Fa4
-- 2. cizgi = Sol4
-- 2-3. aralik = La4
-- 3. cizgi = Si4
-- 3-4. aralik = Do5
-- 4. cizgi = Re5
-- 4-5. aralik = Mi5
-- 5. cizgi = Fa5
+SOLFEJ OKUMA KURALLARI:
+- "es" veya "eb" = Mi bemol (Mib)
+- "sib" = Si bemol
+- "fa#" = Fa diyez
+- "do#" = Do diyez
+- Alt cizgi (la__) = uzatma, ayni notayi daha uzun sur
+- Baglama yayini = ayni nota, suresi uzar
 
-SURELER:
-- Birlik = 4
-- Ikilik = 2
-- Dortluk = 1
-- Sekizlik = 0.5
+SURELER - nota basina gore belirle:
+- Birlik (dolu olmayan, sapsiz) = 4
+- Ikilik (dolu olmayan, sapli) = 2
+- Dortluk (dolu, sapli) = 1
+- Sekizlik (dolu, sapli, bayrakli) = 0.5
 - Onaltilik = 0.25
 - Noktalı dortluk = 1.5
 - Noktalı ikilik = 3
 
-AKSIDANLAR:
-- Diyez = # (notanin hemen arkasina: Fa4#)
-- Bemol = b (notanin hemen arkasina: Sib4)
-- Armurdeki diyez/bemoller tum o notaya uygulanir, her seferinde tekrar yazma
+ARMUR: Bastaki diyez/bemoller tum ilgili notalara uygulanir.
 
-KURALLAR:
-- Sus isaretlerini ATLA, sadece notalar
-- Her porte icin ayri satir yaz
-- Sadece asagidaki formatta yaz, baska hicbir sey yazma:
+Her porte icin ayri satir yaz. SADECE su formatta, baska hicbir sey yazma:
 
-PORTE 1: Do4(1) Re4(0.5) Mi4(0.5) ...
-PORTE 2: Sol4(1) La4(1) ...
+PORTE 1: Do4(1) Re4(0.5) Mib4(0.5) Sol4(1) ...
+PORTE 2: Si4b(0.5) Do5(0.5) Re5(0.5) ...
 PORTE 3: ..."""
 
 
 def image_to_b64(img):
     buf = io.BytesIO()
-    img.save(buf, format='JPEG', quality=85)
+    img.save(buf, format='JPEG', quality=90)
     return base64.b64encode(buf.getvalue()).decode()
 
 
@@ -111,8 +101,6 @@ def parse_notes(text, staff_offset=0):
         notes_part = line[colon + 1:].strip()
         notes = []
 
-        # Format: IsimOktav(sure) veya IsimOktavAksidens(sure)
-        # Ornekler: Do4(1)  Fa4#(0.5)  Sib4(1)  Mib5(0.5)
         for m in re.finditer(r'([A-Za-z]+)(\d)([#b]?)\(([0-9.]+)\)', notes_part):
             raw_pitch = m.group(1).lower()
             pitch = pitch_map.get(raw_pitch)
@@ -158,14 +146,13 @@ def process_sheet():
         raw_parts = []
 
         if ratio > 1.2:
-            # Uzun goruntu: uce bol (daha iyi kapsama)
             third = h // 3
             crops = [
                 img.crop((0, 0, w, third)),
                 img.crop((0, third, w, third * 2)),
                 img.crop((0, third * 2, w, h)),
             ]
-            for i, crop in enumerate(crops):
+            for crop in crops:
                 text, err = ask_gpt(image_to_b64(crop))
                 if text and not err:
                     raw_parts.append(text)
@@ -208,8 +195,7 @@ def process_sheet():
 
 @app.route('/generate-pdf', methods=['POST'])
 def generate_pdf_endpoint():
-    """Şimdilik devre dışı - PDF özelliği sonra eklenecek."""
-    return jsonify({"success": False, "error": "PDF özelliği yakında eklenecek."}), 501
+    return jsonify({"success": False, "error": "PDF ozelligi yakinda eklenecek."}), 501
 
 
 if __name__ == '__main__':
