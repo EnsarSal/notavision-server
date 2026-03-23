@@ -14,7 +14,7 @@ PROMPT = """Bu bir nota kagidi gorseli. Gorselde her notanin ALTINDA solfej yazi
 GOREV: Her portedeki notalari soldan saga EKSIKSIZ oku.
 
 ONCELIK SIRASI:
-1. Oncce altindaki SOLFEJ YAZILARINI oku (en dogru kaynak)
+1. Once altindaki SOLFEJ YAZILARINI oku (en dogru kaynak)
 2. Solfej yoksa nota baslarinin porte uzerindeki POZISYONUNA bak
 
 SOLFEJ OKUMA KURALLARI:
@@ -39,7 +39,7 @@ ARMUR: Bastaki diyez/bemoller tum ilgili notalara uygulanir.
 Her porte icin ayri satir yaz. SADECE su formatta, baska hicbir sey yazma:
 
 PORTE 1: Do4(1) Re4(0.5) Mib4(0.5) Sol4(1) ...
-PORTE 2: Si4b(0.5) Do5(0.5) Re5(0.5) ...
+PORTE 2: Sib4(0.5) Do5(0.5) Re5(0.5) ...
 PORTE 3: ..."""
 
 
@@ -168,12 +168,13 @@ def process_sheet():
                 raw_parts.append(text)
                 all_notes, all_staves = parse_notes(text)
 
-       if not all_notes:
-    return jsonify({
-        "success": False,
-        "error": "Nota bulunamadi.",
-        "debug_raw": raw_parts  # GPT ne döndürdü?
-    })
+        if not all_notes:
+            return jsonify({
+                "success": False,
+                "error": "Nota bulunamadi.",
+                "debug_raw": raw_parts
+            })
+
         staff_count = len(set(n.get("staffIndex", 0) for n in all_notes))
         raw_text = '\n\n'.join(raw_parts)
 
