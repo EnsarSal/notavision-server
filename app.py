@@ -168,9 +168,12 @@ def process_sheet():
                 raw_parts.append(text)
                 all_notes, all_staves = parse_notes(text)
 
-        if not all_notes:
-            return jsonify({"success": False, "error": "Nota bulunamadi. Daha net bir fotograf deneyin."})
-
+       if not all_notes:
+    return jsonify({
+        "success": False,
+        "error": "Nota bulunamadi.",
+        "debug_raw": raw_parts  # GPT ne döndürdü?
+    })
         staff_count = len(set(n.get("staffIndex", 0) for n in all_notes))
         raw_text = '\n\n'.join(raw_parts)
 
