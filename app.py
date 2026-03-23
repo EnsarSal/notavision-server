@@ -136,47 +136,37 @@ def process_sheet():
             return jsonify({"success": False, "error": "Goruntu eksik"}), 400
 
         b64 = data['image']
+
+        # Görseli küçült ama BÖLME — direkt gönder
         img_bytes = base64.b64decode(b64)
         img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
         w, h = img.size
-        ratio = h / w
 
-        all_notes = []
-        all_staves = []
-        raw_parts = []
+        # Çok büyükse boyutu küçült ama oranı koru
+        max_dim = 2000
+        if w > max_dim or h > max_dim:
+            ratio = min(max_dim / w, max_dim / h)
+            img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
 
-        if ratio > 1.2:
-            third = h // 3
-            crops = [
-                img.crop((0, 0, w, third)),
-                img.crop((0, third, w, third * 2)),
-                img.crop((0, third * 2, w, h)),
-            ]
-            for crop in crops:
-                text, err = ask_gpt(image_to_b64(crop))
-                if text and not err:
-                    raw_parts.append(text)
-                    offset = len(all_staves)
-                    notes_part, staves_part = parse_notes(text, staff_offset=offset)
-                    all_notes.extend(notes_part)
-                    all_staves.extend(staves_part)
-        else:
-            text, err = ask_gpt(image_to_b64(img))
-            if err:
-                return jsonify({"success": False, "error": "API hatasi: " + err})
-            if text:
-                raw_parts.append(text)
-                all_notes, all_staves = parse_notes(text)
+        final_b64 = image_to_b64(img)
+
+        text, err = ask_gpt(final_b64)
+        if err:
+            return jsonify({"success": False, "error": "API hatasi: " + err})
+
+        if not text:
+            return jsonify({"success": False, "error": "GPT bos yanit verdi."})
+
+        all_notes, all_staves = parse_notes(text)
 
         if not all_notes:
             return jsonify({
                 "success": False,
                 "error": "Nota bulunamadi.",
-                "debug_raw": raw_parts
+                "debug_raw": text
             })
 
         staff_count = len(set(n.get("staffIndex", 0) for n in all_notes))
-        raw_text = '\n\n'.join(raw_parts)
 
         return jsonify({
             "success": True,
@@ -188,7 +178,7 @@ def process_sheet():
                     "staffCount": staff_count,
                     "timeSignature": "4/4",
                     "clef": "treble",
-                    "rawText": raw_text
+                    "rawText": text
                 }
             }
         })
