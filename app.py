@@ -3,7 +3,7 @@ import httpx
 import base64
 import re
 import os
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter
 import io
 
 app = Flask(__name__)
@@ -25,11 +25,10 @@ SOLFEGE MAPPINGS:
 - "fa#" = Fa# (F sharp)
 - "do#" = Do# (C sharp)
 - "sol#" = Sol# (G sharp)
-- Underline (la__) = same note held longer, increase duration
 
 KEY SIGNATURE: Apply sharps/flats shown at the beginning to all relevant notes throughout.
 
-DURATIONS (determine from note head appearance):
+DURATIONS:
 - Whole note = 4
 - Half note = 2
 - Quarter note = 1
@@ -44,7 +43,7 @@ PORTE 2: Sib4(0.5) Do5(1) Re5(0.5) ...
 PORTE 3: ...
 PORTE 4: ...
 
-IMPORTANT: You MUST write all {staff_count} PORTE lines. Do not skip any staff."""
+IMPORTANT: You MUST write all {staff_count} PORTE lines. Do not skip any."""
 
 
 def detect_staff_count(img):
@@ -62,9 +61,36 @@ def detect_staff_count(img):
         return 5
 
 
+def enhance_image(img):
+    """Görüntüyü GPT için iyileştir."""
+    # Boyutu büyüt - minimum 1500px genişlik
+    w, h = img.size
+    if w < 1500:
+        scale = 1500 / w
+        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+
+    # Maksimum boyut sınırı
+    w, h = img.size
+    if w > 2500 or h > 2500:
+        scale = min(2500 / w, 2500 / h)
+        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+
+    # Griye çevir - nota kağıtları için daha net
+    img = img.convert('L').convert('RGB')
+
+    # Kontrast artır
+    img = ImageEnhance.Contrast(img).enhance(2.0)
+
+    # Keskinleştir
+    img = img.filter(ImageFilter.SHARPEN)
+    img = ImageEnhance.Sharpness(img).enhance(2.0)
+
+    return img
+
+
 def image_to_b64(img):
     buf = io.BytesIO()
-    img.save(buf, format='JPEG', quality=92)
+    img.save(buf, format='JPEG', quality=95)
     return base64.b64encode(buf.getvalue()).decode()
 
 
@@ -158,14 +184,11 @@ def process_sheet():
         b64 = data['image']
         img_bytes = base64.b64decode(b64)
         img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
-        w, h = img.size
 
         staff_count = detect_staff_count(img)
 
-        max_dim = 2000
-        if w > max_dim or h > max_dim:
-            scale = min(max_dim / w, max_dim / h)
-            img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+        # Görüntüyü iyileştir
+        img = enhance_image(img)
 
         final_b64 = image_to_b64(img)
         text, err = ask_gpt(final_b64, staff_count)
