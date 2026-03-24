@@ -47,7 +47,9 @@ Conversion rules:
 - Half note = 2
 - Whole note = 4
 - Dotted quarter = 1.5
-- Dotted half = 3"""
+- Dotted half = 3
+
+Write EVERY label you see. Count them first, then write all of them. Do not stop early."""
 
 # ─── GÖRÜNTÜ İYİLEŞTİRME ────────────────────────────────────────────────────
 
@@ -258,7 +260,7 @@ def process_sheet():
                 cropped_b64 = pil_to_b64(cropped_enhanced, quality=95)
 
                 # GPT'ye gönder
-                row_text, err = ask_gpt(cropped_b64, read_prompt(i + 1), max_tokens=1024)
+                row_text, err = ask_gpt(cropped_b64, read_prompt(i + 1), max_tokens=2048)
 
                 if err:
                     errors.append(f"Porte {i+1}: {err}")
