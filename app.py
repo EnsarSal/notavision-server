@@ -153,6 +153,10 @@ def parse_notes(text, staff_idx):
     porte_lines = [l for l in lines if l.strip().upper().startswith("PORTE")]
     search_text = "\n".join(porte_lines) if porte_lines else text
 
+    # Es -> Mib donusumu
+    search_text = re.sub(r'Es(\d)', r'Mib', search_text)
+    search_text = re.sub(r'EB(\d)', r'Mib', search_text, flags=re.IGNORECASE)
+
     for m in re.finditer(r"([A-Za-z]+)(\d)([#b]?)\(([0-9.]+)\)", search_text):
         pitch = pitch_map.get(m.group(1).lower())
         if not pitch:
