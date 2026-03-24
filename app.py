@@ -29,27 +29,22 @@ ROW4: 75 100"""
 def read_prompt(n):
     return (
         "This image shows ONE row of horizontal lines with small text labels written below.\n\n"
-        "IMPORTANT: Read ONLY the text labels written below the lines. "
-        "Do NOT read the key signature symbols at the left edge. "
-        "Start from the first text label after the clef symbol.\n\n"
-        "Count all labels first, then write every single one from left to right. Do not stop early.\n\n"
-        f"Your output MUST be exactly one line starting with 'PORTE {n}:'\n\n"
-        f"PORTE {n}: Do4(1) Re4(0.5) Mib4(0.5) ...\n\n"
+        "Read ONLY the text labels written below the lines from left to right. "
+        "Do NOT read key signature symbols at the left edge. "
+        "Start from the first text label after the clef.\n\n"
+        "Count all labels first, then write every single one. Do not stop early.\n\n"
+        f"Output MUST be exactly one line starting with 'PORTE {n}:'\n\n"
+        f"Example: PORTE {n}: Do4(1) Re4(0.5) Mib4(0.5) Sol4(1) ...\n\n"
         "Conversion rules:\n"
-        '- "es" or "eb" -> Mib4(0.5)\n'
-        '- "sib" -> Sib4(1)\n'
-        '- "fa#" or "fas" -> Fa4#(1)\n'
-        '- "re#" or "res" -> Re4#(1)\n'
-        '- "sol#" -> Sol4#(1)\n'
-        '- "do#" -> Do4#(1)\n'
-        '- "la#" -> La4#(1)\n'
-        "- All others: capitalize first letter, add octave 4, duration 1\n"
-        "- Eighth note (with flag/beam) = 0.5\n"
-        "- Quarter note = 1\n"
-        "- Half note = 2\n"
-        "- Whole note = 4\n"
-        "- Dotted quarter = 1.5\n"
-        "- Dotted half = 3\n\n"
+        "- es or eb -> Mib4(0.5)\n"
+        "- sib -> Sib4(1)\n"
+        "- fa# -> Fa4#(1)\n"
+        "- re# -> Re4#(1)\n"
+        "- sol# -> Sol4#(1)\n"
+        "- do# -> Do4#(1)\n"
+        "- la# -> La4#(1)\n"
+        "- Others: capitalize first letter, octave 4, duration 1\n"
+        "- Eighth note = 0.5, Quarter = 1, Half = 2, Whole = 4, Dotted quarter = 1.5\n\n"
         f"Write EVERY label. Output ONLY the PORTE {n}: line, nothing else."
     )
 
@@ -57,48 +52,31 @@ def read_prompt(n):
 # ─── GÖRÜNTÜ İYİLEŞTİRME ─────────────────────────────────────────────────────
 
 def preprocess_image(img_pil):
+    """Görüntüyü GPT için iyileştir - orijinal rengi koru, sadece kontrast artır."""
     img_np = np.array(img_pil.convert('RGB'))
-    img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
-    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-    denoised = cv2.medianBlur(gray, 3)
+    # Kontrast artır
+    lab = cv2.cvtColor(img_np, cv2.COLOR_RGB2LAB)
+    l, a, b = cv2.split(lab)
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    enhanced = clahe.apply(denoised)
-    binary = cv2.adaptiveThreshold(
-        enhanced, 255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY,
-        blockSize=15, C=8
-    )
-    # Eğim düzelt
-    binary_inv = cv2.bitwise_not(binary)
-    coords = np.column_stack(np.where(binary_inv > 0))
-    if len(coords) > 100:
-        angle = cv2.minAreaRect(coords)[-1]
-        if angle < -45:
-            angle = 90 + angle
-        if abs(angle) > 0.5:
-            h, w = binary.shape
-            center = (w // 2, h // 2)
-            M = cv2.getRotationMatrix2D(center, angle, 1.0)
-            binary = cv2.warpAffine(binary, M, (w, h),
-                                    flags=cv2.INTER_CUBIC,
-                                    borderMode=cv2.BORDER_REPLICATE)
-    return Image.fromarray(binary).convert('RGB')
+    l = clahe.apply(l)
+    lab = cv2.merge((l, a, b))
+    result = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+    return Image.fromarray(result)
 
 
 def enhance_crop(img_pil):
+    """Crop edilmiş porteyi keskinleştir ve büyüt."""
     img_np = np.array(img_pil.convert('RGB'))
-    gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
-    h, w = gray.shape
-    if w < 800:
-        scale = 800 / w
-        gray = cv2.resize(gray, (int(w * scale), int(h * scale)),
-                          interpolation=cv2.INTER_LANCZOS4)
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(4, 4))
-    enhanced = clahe.apply(gray)
+    # Boyutu büyüt
+    h, w = img_np.shape[:2]
+    if w < 1000:
+        scale = 1000 / w
+        img_np = cv2.resize(img_np, (int(w * scale), int(h * scale)),
+                            interpolation=cv2.INTER_LANCZOS4)
+    # Keskinleştir
     kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
-    sharpened = cv2.filter2D(enhanced, -1, kernel)
-    return Image.fromarray(sharpened).convert('RGB')
+    sharpened = cv2.filter2D(img_np, -1, kernel)
+    return Image.fromarray(np.clip(sharpened, 0, 255).astype(np.uint8))
 
 
 # ─── YARDIMCI FONKSİYONLAR ───────────────────────────────────────────────────
@@ -152,7 +130,6 @@ def parse_notes(text, staff_idx):
         "do": "Do", "re": "Re", "mi": "Mi", "fa": "Fa",
         "sol": "Sol", "la": "La", "si": "Si"
     }
-    # PORTE satiri varsa onlari kullan, yoksa tum metni tara
     lines = text.split("\n")
     porte_lines = [l for l in lines if l.strip().upper().startswith("PORTE")]
     search_text = "\n".join(porte_lines) if porte_lines else text
@@ -202,7 +179,7 @@ def process_sheet():
             scale = min(2500 / w, 2500 / h)
             img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
 
-        # ADIM 1: OpenCV ile iyilestir
+        # ADIM 1: Kontrast iyilestir
         img_clean = preprocess_image(img)
         full_b64 = pil_to_b64(img_clean)
 
