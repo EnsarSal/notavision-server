@@ -49,7 +49,13 @@ Conversion rules:
 - Dotted quarter = 1.5
 - Dotted half = 3
 
-Write EVERY label you see. Count them first, then write all of them. Do not stop early."""
+Write EVERY label you see. Count them first, then write all of them. Do not stop early.
+
+CRITICAL:
+- Start from the VERY FIRST label on the left, do not skip any
+- Your output MUST start with "PORTE {n}:" followed by all notes
+- Do not add any text before or after the PORTE line
+- Do not interpret the key signature as a note - only read the text labels below the lines"""
 
 # ─── GÖRÜNTÜ İYİLEŞTİRME ────────────────────────────────────────────────────
 
@@ -170,10 +176,16 @@ def ask_gpt(b64, prompt, max_tokens=512):
 def parse_notes(text, staff_idx):
     notes = []
     pitch_map = {
-        'do': 'Do', 're': 'Re', 'mi': 'Mi', 'fa': 'Fa',
-        'sol': 'Sol', 'la': 'La', 'si': 'Si'
+        "do": "Do", "re": "Re", "mi": "Mi", "fa": "Fa",
+        "sol": "Sol", "la": "La", "si": "Si"
     }
-    for m in re.finditer(r'([A-Za-z]+)(\d)([#b]?)\(([0-9.]+)\)', text):
+    # PORTE satiri varsa onlari isle, yoksa tum metni isle
+    porte_lines = [l for l in text.split("
+") if l.strip().upper().startswith("PORTE")]
+    search_text = "
+".join(porte_lines) if porte_lines else text
+    
+    for m in re.finditer(r"([A-Za-z]+)(\d)([#b]?)\(([0-9.]+)\)", search_text):
         pitch = pitch_map.get(m.group(1).lower())
         if not pitch:
             continue
