@@ -11,50 +11,50 @@ from PIL import Image
 app = Flask(__name__)
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
-# ─── PROMPTLAR ───────────────────────────────────────────────────────────────
-
-DETECT_PROMPT = """This image has rows of horizontal lines with text labels below them.
-
-Count the rows and estimate where each row starts and ends as a percentage of image height.
-0% = top, 100% = bottom. Include generous padding.
-
-Reply ONLY in this exact format, nothing else:
-COUNT: 4
-ROW1: 2 27
-ROW2: 25 52
-ROW3: 50 77
-ROW4: 75 100"""
+DETECT_PROMPT = (
+    "This image has rows of horizontal lines with text labels below them.\n\n"
+    "Count the rows and estimate where each row starts and ends as a percentage of image height.\n"
+    "0% = top, 100% = bottom. Include generous padding.\n\n"
+    "Reply ONLY in this exact format, nothing else:\n"
+    "COUNT: 4\n"
+    "ROW1: 2 27\n"
+    "ROW2: 25 52\n"
+    "ROW3: 50 77\n"
+    "ROW4: 75 100"
+)
 
 
 def read_prompt(n):
     return (
         "This image shows ONE row of horizontal lines with small text labels written below.\n\n"
-        "Read ONLY the text labels written below the lines from left to right. "
-        "Do NOT read key signature symbols at the left edge. "
-        "Start from the first text label after the clef.\n\n"
+        "Read ONLY the text labels written below the lines from left to right.\n"
+        "Do NOT read key signature symbols at the left edge.\n"
+        "Start from the first text label after the clef symbol.\n\n"
         "Count all labels first, then write every single one. Do not stop early.\n\n"
-        f"Output MUST be exactly one line starting with 'PORTE {n}:'\n\n"
-        f"Example: PORTE {n}: Do4(1) Re4(0.5) Mib4(0.5) Sol4(1) ...\n\n"
-        "Conversion rules:\n"
+        "DURATION RULES - most notes in this style are eighth notes:\n"
+        "- Default duration is 0.5 (eighth note) - use this when unsure\n"
+        "- Eighth note (with flag or beam) = 0.5\n"
+        "- Quarter note (filled, no flag) = 1\n"
+        "- Half note (open, with stem) = 2\n"
+        "- Whole note (open, no stem) = 4\n"
+        "- Dotted quarter = 1.5\n\n"
+        "LABEL CONVERSION:\n"
         "- es or eb -> Mib4(0.5)\n"
-        "- sib -> Sib4(1)\n"
-        "- fa# -> Fa4#(1)\n"
-        "- re# -> Re4#(1)\n"
-        "- sol# -> Sol4#(1)\n"
-        "- do# -> Do4#(1)\n"
-        "- la# -> La4#(1)\n"
-        "- Others: capitalize first letter, octave 4, duration 1\n"
-        "- Eighth note = 0.5, Quarter = 1, Half = 2, Whole = 4, Dotted quarter = 1.5\n\n"
-        f"Write EVERY label. Output ONLY the PORTE {n}: line, nothing else."
+        "- sib -> Sib4(0.5)\n"
+        "- fa# -> Fa4#(0.5)\n"
+        "- re# -> Re4#(0.5)\n"
+        "- sol# -> Sol4#(0.5)\n"
+        "- do# -> Do4#(0.5)\n"
+        "- la# -> La4#(0.5)\n"
+        "- Others: capitalize first letter, octave 4, default duration 0.5\n\n"
+        f"Output MUST be exactly one line starting with 'PORTE {n}:'\n"
+        f"Example: PORTE {n}: Mib4(0.5) Do4(0.5) Re4(0.5) Re4(0.5) ...\n\n"
+        "Write EVERY label you see. Output ONLY this one line, nothing else."
     )
 
 
-# ─── GÖRÜNTÜ İYİLEŞTİRME ─────────────────────────────────────────────────────
-
 def preprocess_image(img_pil):
-    """Görüntüyü GPT için iyileştir - orijinal rengi koru, sadece kontrast artır."""
     img_np = np.array(img_pil.convert('RGB'))
-    # Kontrast artır
     lab = cv2.cvtColor(img_np, cv2.COLOR_RGB2LAB)
     l, a, b = cv2.split(lab)
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
@@ -65,21 +65,16 @@ def preprocess_image(img_pil):
 
 
 def enhance_crop(img_pil):
-    """Crop edilmiş porteyi keskinleştir ve büyüt."""
     img_np = np.array(img_pil.convert('RGB'))
-    # Boyutu büyüt
     h, w = img_np.shape[:2]
     if w < 1000:
         scale = 1000 / w
         img_np = cv2.resize(img_np, (int(w * scale), int(h * scale)),
                             interpolation=cv2.INTER_LANCZOS4)
-    # Keskinleştir
     kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
     sharpened = cv2.filter2D(img_np, -1, kernel)
     return Image.fromarray(np.clip(sharpened, 0, 255).astype(np.uint8))
 
-
-# ─── YARDIMCI FONKSİYONLAR ───────────────────────────────────────────────────
 
 def pil_to_b64(img_pil, quality=92):
     buf = io.BytesIO()
@@ -156,8 +151,6 @@ def crop_staff(img_pil, top_pct, bottom_pct):
     return img_pil.crop((0, top, w, bottom))
 
 
-# ─── ENDPOINT'LER ─────────────────────────────────────────────────────────────
-
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({"status": "ok", "opencv": cv2.__version__})
@@ -173,17 +166,14 @@ def process_sheet():
         img_bytes = base64.b64decode(data['image'])
         img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
 
-        # Boyutu sinirla
         w, h = img.size
         if w > 2500 or h > 2500:
             scale = min(2500 / w, 2500 / h)
             img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
 
-        # ADIM 1: Kontrast iyilestir
         img_clean = preprocess_image(img)
         full_b64 = pil_to_b64(img_clean)
 
-        # ADIM 2: Porte konumlarini tespit et
         detect_text, err = ask_gpt(full_b64, DETECT_PROMPT, max_tokens=256)
         if err or not detect_text:
             return jsonify({"success": False, "error": "Porte tespiti basarisiz: " + (err or "bos yanit")})
@@ -203,7 +193,6 @@ def process_sheet():
                     "bottom": round(i * 100 / count)
                 })
 
-        # ADIM 3: Her porteyi crop et + iyilestir + GPT'ye gonder
         all_notes = []
         all_staves = []
         raw_parts = []
