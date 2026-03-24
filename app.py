@@ -26,19 +26,14 @@ DETECT_PROMPT = (
 
 def read_prompt(n):
     return (
-        "This image shows ONE row of horizontal lines with small text labels written below.\n\n"
-        "Read ONLY the text labels written below the lines from left to right.\n"
-        "Do NOT read key signature symbols at the left edge.\n"
-        "Start from the first text label after the clef symbol.\n\n"
+        "This image contains text labels written below some horizontal lines.\n\n"
+        "Your task: transcribe all the small text labels you see, left to right.\n"
+        "Ignore any symbols on the far left. Only read the text labels.\n\n"
         "Count all labels first, then write every single one. Do not stop early.\n\n"
-        "DURATION RULES - most notes in this style are eighth notes:\n"
-        "- Default duration is 0.5 (eighth note) - use this when unsure\n"
-        "- Eighth note (with flag or beam) = 0.5\n"
-        "- Quarter note (filled, no flag) = 1\n"
-        "- Half note (open, with stem) = 2\n"
-        "- Whole note (open, no stem) = 4\n"
-        "- Dotted quarter = 1.5\n\n"
-        "LABEL CONVERSION:\n"
+        "Duration rules:\n"
+        "- Default duration is 0.5\n"
+        "- Use 1 for clearly longer notes, 2 for half notes, 4 for whole notes\n\n"
+        "Label conversion:\n"
         "- es or eb -> Mib4(0.5)\n"
         "- sib -> Sib4(0.5)\n"
         "- fa# -> Fa4#(0.5)\n"
@@ -46,10 +41,26 @@ def read_prompt(n):
         "- sol# -> Sol4#(0.5)\n"
         "- do# -> Do4#(0.5)\n"
         "- la# -> La4#(0.5)\n"
-        "- Others: capitalize first letter, octave 4, default duration 0.5\n\n"
-        f"Output MUST be exactly one line starting with 'PORTE {n}:'\n"
-        f"Example: PORTE {n}: Mib4(0.5) Do4(0.5) Re4(0.5) Re4(0.5) ...\n\n"
-        "Write EVERY label you see. Output ONLY this one line, nothing else."
+        "- Others: capitalize first letter, add 4, duration 0.5\n\n"
+        f"Output exactly one line: PORTE {n}: Do4(0.5) Re4(0.5) ...\n"
+        "Nothing else."
+    )
+
+
+def read_prompt_retry(n):
+    """GPT reddederse daha nötr bir prompt ile tekrar dene."""
+    return (
+        "Look at this image. There are small words written below the horizontal lines.\n\n"
+        "Please list all the words you can see, from left to right.\n"
+        "The words are simple syllables like: do, re, mi, fa, sol, la, si, es, sib, fa#\n\n"
+        "Convert each word:\n"
+        "- es -> Mib4(0.5)\n"
+        "- sib -> Sib4(0.5)\n"
+        "- fa# -> Fa4#(0.5)\n"
+        "- re# -> Re4#(0.5)\n"
+        "- Others: first letter uppercase + 4 + (0.5)\n\n"
+        f"Write only: PORTE {n}: word1 word2 word3 ...\n"
+        "Example: PORTE 1: Do4(0.5) Re4(0.5) Mi4(0.5)"
     )
 
 
@@ -82,7 +93,7 @@ def pil_to_b64(img_pil, quality=92):
     return base64.b64encode(buf.getvalue()).decode()
 
 
-def ask_gpt(b64, prompt, max_tokens=512):
+def ask_gpt(b64, prompt, max_tokens=2048):
     try:
         resp = httpx.post(
             "https://api.openai.com/v1/chat/completions",
@@ -117,6 +128,19 @@ def ask_gpt(b64, prompt, max_tokens=512):
         return result["choices"][0]["message"]["content"].strip(), None
     except Exception as e:
         return None, str(e)
+
+
+def is_refusal(text):
+    """GPT'nin reddettiğini tespit et."""
+    if not text:
+        return True
+    refusal_phrases = [
+        "i'm sorry", "i cannot", "i can't", "unable to",
+        "not able to", "i apologize", "cannot assist",
+        "can't assist", "i won't"
+    ]
+    lower = text.lower()
+    return any(phrase in lower for phrase in refusal_phrases)
 
 
 def parse_notes(text, staff_idx):
@@ -204,13 +228,18 @@ def process_sheet():
                 cropped_enhanced = enhance_crop(cropped)
                 cropped_b64 = pil_to_b64(cropped_enhanced, quality=95)
 
-                row_text, err = ask_gpt(cropped_b64, read_prompt(i + 1), max_tokens=2048)
+                # İlk deneme
+                row_text, err = ask_gpt(cropped_b64, read_prompt(i + 1))
+
+                # GPT reddettiyse farklı prompt ile tekrar dene
+                if err or is_refusal(row_text):
+                    row_text, err = ask_gpt(cropped_b64, read_prompt_retry(i + 1))
 
                 if err:
                     errors.append(f"Porte {i+1}: {err}")
                     continue
-                if not row_text:
-                    errors.append(f"Porte {i+1}: bos yanit")
+                if not row_text or is_refusal(row_text):
+                    errors.append(f"Porte {i+1}: reddedildi")
                     continue
 
                 raw_parts.append(row_text)
