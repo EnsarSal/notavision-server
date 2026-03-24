@@ -3,47 +3,48 @@ import httpx
 import base64
 import re
 import os
-from PIL import Image, ImageEnhance, ImageFilter
+from PIL import Image
 import io
 
 app = Flask(__name__)
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
-SINGLE_STAFF_PROMPT = """This image shows ONE line of sheet music with solfege syllables written below each note.
+DETECT_PROMPT = """This image has rows of horizontal lines with text labels below them.
 
-Read the solfege syllables below the notes from LEFT to RIGHT. They look like: do, re, mi, fa, sol, la, si, sib, fa#, es, etc.
+Count the rows and estimate where each row starts and ends as a percentage of image height (0% = top, 100% = bottom). Include some padding around each row.
+
+Reply ONLY in this exact format, nothing else:
+COUNT: 4
+ROW1: 5 28
+ROW2: 28 52
+ROW3: 52 76
+ROW4: 76 100"""
+
+def read_prompt(n):
+    return f"""This image shows ONE row of horizontal lines with small text labels written below.
+
+Read ALL text labels below the lines from left to right. Do not skip any.
+
+Reply ONLY in this exact format, one line only:
+PORTE {n}: Do4(1) Re4(0.5) Mib4(0.5) ...
 
 Rules:
-- "es" = Mib (E flat)
-- "sib" = Sib (B flat)  
-- "fa#" = Fa# (F sharp)
-- Determine duration from note appearance (quarter=1, eighth=0.5, half=2, whole=4, dotted quarter=1.5)
-- Key signature at the start applies to all notes
-
-Output format - write ONLY this one line, nothing else:
-PORTE 1: Do4(1) Re4(0.5) Mib4(0.5) Sol4(1) ..."""
+- "es" → Mib4(0.5)
+- "sib" → Sib4(1)
+- "fa#" or "faş" → Fa4#(1)
+- "re#" or "reş" → Re4#(1)
+- "sol#" → Sol4#(1)
+- Others: capitalize first letter, add octave 4
+- Eighth note = 0.5, quarter = 1, half = 2, whole = 4, dotted quarter = 1.5"""
 
 
 def image_to_b64(img):
     buf = io.BytesIO()
-    img.save(buf, format='JPEG', quality=95)
+    img.save(buf, format='JPEG', quality=92)
     return base64.b64encode(buf.getvalue()).decode()
 
 
-def enhance_image(img):
-    w, h = img.size
-    if w < 1200:
-        scale = 1200 / w
-        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
-    img = img.convert('L').convert('RGB')
-    img = ImageEnhance.Contrast(img).enhance(1.8)
-    img = img.filter(ImageFilter.SHARPEN)
-    return img
-
-
-def ask_gpt_single(b64, staff_num):
-    """Tek bir porte için GPT'ye sor."""
-    prompt = SINGLE_STAFF_PROMPT.replace('PORTE 1', f'PORTE {staff_num}')
+def ask_gpt(b64, prompt):
     resp = httpx.post(
         "https://api.openai.com/v1/chat/completions",
         headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
@@ -74,62 +75,26 @@ def parse_notes(text, staff_idx):
         'do': 'Do', 're': 'Re', 'mi': 'Mi', 'fa': 'Fa',
         'sol': 'Sol', 'la': 'La', 'si': 'Si'
     }
-    # PORTE satırını bul
-    for line in text.strip().split('\n'):
-        line = line.strip()
-        if not line.upper().startswith('PORTE'):
+    for m in re.finditer(r'([A-Za-z]+)(\d)([#b]?)\(([0-9.]+)\)', text):
+        pitch = pitch_map.get(m.group(1).lower())
+        if not pitch:
             continue
-        colon = line.find(':')
-        if colon < 0:
-            continue
-        notes_part = line[colon + 1:].strip()
-        for m in re.finditer(r'([A-Za-z]+)(\d)([#b]?)\(([0-9.]+)\)', notes_part):
-            raw_pitch = m.group(1).lower()
-            pitch = pitch_map.get(raw_pitch)
-            if not pitch:
-                continue
-            notes.append({
-                "pitch": pitch,
-                "octave": int(m.group(2)),
-                "duration": float(m.group(4)),
-                "accidental": m.group(3) if m.group(3) else None,
-                "staffIndex": staff_idx,
-                "confidence": 0.9
-            })
-        if notes:
-            break
+        notes.append({
+            "pitch": pitch,
+            "octave": int(m.group(2)),
+            "duration": float(m.group(4)),
+            "accidental": m.group(3) if m.group(3) else None,
+            "staffIndex": staff_idx,
+            "confidence": 0.9
+        })
     return notes
 
 
-def crop_staves(img, staff_count):
-    """Görüntüyü porte sayısına göre yatay şeritler halinde böl."""
+def crop_staff(img, top_pct, bottom_pct):
     w, h = img.size
-    strip_h = h // staff_count
-    crops = []
-    for i in range(staff_count):
-        top = i * strip_h
-        bottom = (i + 1) * strip_h if i < staff_count - 1 else h
-        # Biraz padding ekle
-        pad = int(strip_h * 0.05)
-        top = max(0, top - pad)
-        bottom = min(h, bottom + pad)
-        crops.append(img.crop((0, top, w, bottom)))
-    return crops
-
-
-def detect_staff_count(img):
-    w, h = img.size
-    ratio = h / w
-    if ratio < 0.35:
-        return 1
-    elif ratio < 0.6:
-        return 2
-    elif ratio < 0.85:
-        return 3
-    elif ratio < 1.1:
-        return 4
-    else:
-        return 5
+    top = max(0, int((top_pct / 100) * h))
+    bottom = min(h, int((bottom_pct / 100) * h))
+    return img.crop((0, top, w, bottom))
 
 
 @app.route('/health', methods=['GET'])
@@ -144,30 +109,51 @@ def process_sheet():
         if not data or 'image' not in data:
             return jsonify({"success": False, "error": "Goruntu eksik"}), 400
 
-        b64 = data['image']
-        img_bytes = base64.b64decode(b64)
+        img_bytes = base64.b64decode(data['image'])
         img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
 
-        staff_count = detect_staff_count(img)
+        # Çok büyükse küçült
+        w, h = img.size
+        if w > 2000 or h > 3000:
+            scale = min(2000 / w, 3000 / h)
+            img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
 
-        # Her porteyi ayrı crop et
-        crops = crop_staves(img, staff_count)
+        full_b64 = image_to_b64(img)
 
+        # ADIM 1: Porte konumlarını tespit et
+        detect_text, err = ask_gpt(full_b64, DETECT_PROMPT)
+        if err or not detect_text:
+            return jsonify({"success": False, "error": "Tespit hatası: " + (err or "boş yanıt")})
+
+        count_match = re.search(r'COUNT:\s*(\d+)', detect_text)
+        count = int(count_match.group(1)) if count_match else 4
+
+        rows = []
+        for i in range(1, count + 1):
+            row_match = re.search(rf'ROW{i}:\s*(\d+)\s+(\d+)', detect_text)
+            if row_match:
+                rows.append({'top': int(row_match.group(1)), 'bottom': int(row_match.group(2))})
+            else:
+                rows.append({
+                    'top': round((i - 1) * 100 / count),
+                    'bottom': round(i * 100 / count)
+                })
+
+        # ADIM 2: Her porteyi crop edip ayrı GPT'ye gönder
         all_notes = []
         all_staves = []
         raw_parts = []
 
-        for i, crop in enumerate(crops):
-            enhanced = enhance_image(crop)
-            b64_crop = image_to_b64(enhanced)
-            text, err = ask_gpt_single(b64_crop, i + 1)
+        for i, row in enumerate(rows):
+            cropped = crop_staff(img, row['top'], row['bottom'])
+            cropped_b64 = image_to_b64(cropped)
 
-            if err or not text:
+            row_text, err = ask_gpt(cropped_b64, read_prompt(i + 1))
+            if err or not row_text:
                 continue
 
-            raw_parts.append(f"PORTE {i+1}: {text}")
-            notes = parse_notes(text, i)
-
+            raw_parts.append(row_text)
+            notes = parse_notes(row_text, i)
             if notes:
                 all_notes.extend(notes)
                 all_staves.append({"index": i, "noteCount": len(notes)})
@@ -176,10 +162,10 @@ def process_sheet():
             return jsonify({
                 "success": False,
                 "error": "Nota bulunamadi.",
-                "debug_raw": raw_parts
+                "debug": detect_text + "\n\n" + "\n".join(raw_parts)
             })
 
-        actual_staff_count = len(set(n.get("staffIndex", 0) for n in all_notes))
+        staff_count = len(set(n.get("staffIndex", 0) for n in all_notes))
 
         return jsonify({
             "success": True,
@@ -188,10 +174,10 @@ def process_sheet():
                 "staves": all_staves,
                 "metadata": {
                     "noteCount": len(all_notes),
-                    "staffCount": actual_staff_count,
+                    "staffCount": staff_count,
                     "timeSignature": "4/4",
                     "clef": "treble",
-                    "rawText": '\n'.join(raw_parts)
+                    "rawText": "\n".join(raw_parts)
                 }
             }
         })
