@@ -11,7 +11,7 @@ from PIL import Image
 app = Flask(__name__)
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
-# ─── PROMPT ───────────────────────────────────────────────────────────────────
+# ─── PROMPTLAR ───────────────────────────────────────────────────────────────
 
 DETECT_PROMPT = """This image has rows of horizontal lines with text labels below them.
 
@@ -25,112 +25,79 @@ ROW2: 25 52
 ROW3: 50 77
 ROW4: 75 100"""
 
+
 def read_prompt(n):
-    return f"""This image shows ONE row of horizontal lines with small text labels written below.
+    return (
+        "This image shows ONE row of horizontal lines with small text labels written below.\n\n"
+        "IMPORTANT: Read ONLY the text labels written below the lines. "
+        "Do NOT read the key signature symbols at the left edge. "
+        "Start from the first text label after the clef symbol.\n\n"
+        "Count all labels first, then write every single one from left to right. Do not stop early.\n\n"
+        f"Your output MUST be exactly one line starting with 'PORTE {n}:'\n\n"
+        f"PORTE {n}: Do4(1) Re4(0.5) Mib4(0.5) ...\n\n"
+        "Conversion rules:\n"
+        '- "es" or "eb" -> Mib4(0.5)\n'
+        '- "sib" -> Sib4(1)\n'
+        '- "fa#" or "fas" -> Fa4#(1)\n'
+        '- "re#" or "res" -> Re4#(1)\n'
+        '- "sol#" -> Sol4#(1)\n'
+        '- "do#" -> Do4#(1)\n'
+        '- "la#" -> La4#(1)\n'
+        "- All others: capitalize first letter, add octave 4, duration 1\n"
+        "- Eighth note (with flag/beam) = 0.5\n"
+        "- Quarter note = 1\n"
+        "- Half note = 2\n"
+        "- Whole note = 4\n"
+        "- Dotted quarter = 1.5\n"
+        "- Dotted half = 3\n\n"
+        f"Write EVERY label. Output ONLY the PORTE {n}: line, nothing else."
+    )
 
-Read ALL text labels below the lines from left to right. Do not skip any label.
 
-Output ONLY this one line, nothing else:
-PORTE {n}: Do4(1) Re4(0.5) Mib4(0.5) ...
-
-Conversion rules:
-- "es" or "eb" → Mib4(0.5)
-- "sib" → Sib4(1)
-- "fa#" or "faş" or "fa♯" → Fa4#(1)
-- "re#" or "reş" or "re♯" → Re4#(1)
-- "sol#" or "sol♯" → Sol4#(1)
-- "do#" or "do♯" → Do4#(1)
-- "la#" or "la♯" → La4#(1)
-- All others: capitalize first letter, add octave 4, duration 1
-- Eighth note (with flag/beam) = 0.5
-- Quarter note = 1
-- Half note = 2
-- Whole note = 4
-- Dotted quarter = 1.5
-- Dotted half = 3
-
-Write EVERY label you see. Count them first, then write all of them. Do not stop early.
-
-CRITICAL:
-- Start from the VERY FIRST label on the left, do not skip any
-- Your output MUST start with "PORTE {n}:" followed by all notes
-- Do not add any text before or after the PORTE line
-- Do not interpret the key signature as a note - only read the text labels below the lines"""
-
-# ─── GÖRÜNTÜ İYİLEŞTİRME ────────────────────────────────────────────────────
+# ─── GÖRÜNTÜ İYİLEŞTİRME ─────────────────────────────────────────────────────
 
 def preprocess_image(img_pil):
-    """
-    PIL görüntüsünü OpenCV ile iyileştir:
-    1. Gri tonlamaya çevir
-    2. Gürültüyü azalt
-    3. Kontrast artır (CLAHE)
-    4. Adaptif threshold
-    5. Eğimi düzelt (deskew)
-    """
-    # PIL → numpy
     img_np = np.array(img_pil.convert('RGB'))
     img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
-
-    # 1. Griye çevir
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-
-    # 2. Gürültü azalt
     denoised = cv2.medianBlur(gray, 3)
-
-    # 3. CLAHE ile kontrast iyileştir
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     enhanced = clahe.apply(denoised)
-
-    # 4. Adaptif threshold (siyah-beyaz)
     binary = cv2.adaptiveThreshold(
         enhanced, 255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
         cv2.THRESH_BINARY,
         blockSize=15, C=8
     )
-
-    # 5. Eğim tespiti ve düzeltme
+    # Eğim düzelt
     binary_inv = cv2.bitwise_not(binary)
     coords = np.column_stack(np.where(binary_inv > 0))
     if len(coords) > 100:
         angle = cv2.minAreaRect(coords)[-1]
         if angle < -45:
             angle = 90 + angle
-        if abs(angle) > 0.5:  # 0.5 dereceden fazla eğim varsa düzelt
-            (h, w) = binary.shape
+        if abs(angle) > 0.5:
+            h, w = binary.shape
             center = (w // 2, h // 2)
             M = cv2.getRotationMatrix2D(center, angle, 1.0)
-            binary = cv2.warpAffine(
-                binary, M, (w, h),
-                flags=cv2.INTER_CUBIC,
-                borderMode=cv2.BORDER_REPLICATE
-            )
-
-    # numpy → PIL
-    result = Image.fromarray(binary).convert('RGB')
-    return result
+            binary = cv2.warpAffine(binary, M, (w, h),
+                                    flags=cv2.INTER_CUBIC,
+                                    borderMode=cv2.BORDER_REPLICATE)
+    return Image.fromarray(binary).convert('RGB')
 
 
 def enhance_crop(img_pil):
-    """Crop edilmiş tek bir porteyi GPT için iyileştir."""
     img_np = np.array(img_pil.convert('RGB'))
     gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
-
-    # Boyutu büyüt (minimum 800px genişlik)
     h, w = gray.shape
     if w < 800:
         scale = 800 / w
-        gray = cv2.resize(gray, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_LANCZOS4)
-
-    # Kontrast artır
+        gray = cv2.resize(gray, (int(w * scale), int(h * scale)),
+                          interpolation=cv2.INTER_LANCZOS4)
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(4, 4))
     enhanced = clahe.apply(gray)
-
-    # Keskinleştir
     kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
     sharpened = cv2.filter2D(enhanced, -1, kernel)
-
     return Image.fromarray(sharpened).convert('RGB')
 
 
@@ -156,7 +123,13 @@ def ask_gpt(b64, prompt, max_tokens=512):
                 "messages": [{
                     "role": "user",
                     "content": [
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "high"}},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{b64}",
+                                "detail": "high"
+                            }
+                        },
                         {"type": "text", "text": prompt}
                     ]
                 }]
@@ -165,9 +138,9 @@ def ask_gpt(b64, prompt, max_tokens=512):
         )
         result = resp.json()
         if "error" in result:
-            return None, result["error"].get("message", "API hatası")
+            return None, result["error"].get("message", "API hatasi")
         if "choices" not in result or not result["choices"]:
-            return None, "Boş yanıt"
+            return None, "Bos yanit"
         return result["choices"][0]["message"]["content"].strip(), None
     except Exception as e:
         return None, str(e)
@@ -179,12 +152,11 @@ def parse_notes(text, staff_idx):
         "do": "Do", "re": "Re", "mi": "Mi", "fa": "Fa",
         "sol": "Sol", "la": "La", "si": "Si"
     }
-    # PORTE satiri varsa onlari isle, yoksa tum metni isle
-    porte_lines = [l for l in text.split("
-") if l.strip().upper().startswith("PORTE")]
-    search_text = "
-".join(porte_lines) if porte_lines else text
-    
+    # PORTE satiri varsa onlari kullan, yoksa tum metni tara
+    lines = text.split("\n")
+    porte_lines = [l for l in lines if l.strip().upper().startswith("PORTE")]
+    search_text = "\n".join(porte_lines) if porte_lines else text
+
     for m in re.finditer(r"([A-Za-z]+)(\d)([#b]?)\(([0-9.]+)\)", search_text):
         pitch = pitch_map.get(m.group(1).lower())
         if not pitch:
@@ -207,7 +179,7 @@ def crop_staff(img_pil, top_pct, bottom_pct):
     return img_pil.crop((0, top, w, bottom))
 
 
-# ─── ENDPOINT'LER ────────────────────────────────────────────────────────────
+# ─── ENDPOINT'LER ─────────────────────────────────────────────────────────────
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -219,44 +191,42 @@ def process_sheet():
     try:
         data = request.json
         if not data or 'image' not in data:
-            return jsonify({"success": False, "error": "Görüntü eksik"}), 400
+            return jsonify({"success": False, "error": "Goruntu eksik"}), 400
 
-        # Görüntüyü yükle
         img_bytes = base64.b64decode(data['image'])
         img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
 
-        # Boyutu sınırla
+        # Boyutu sinirla
         w, h = img.size
-        max_dim = 2500
-        if w > max_dim or h > max_dim:
-            scale = min(max_dim / w, max_dim / h)
+        if w > 2500 or h > 2500:
+            scale = min(2500 / w, 2500 / h)
             img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
 
-        # ── ADIM 1: OpenCV ile görüntü iyileştir ──
+        # ADIM 1: OpenCV ile iyilestir
         img_clean = preprocess_image(img)
         full_b64 = pil_to_b64(img_clean)
 
-        # ── ADIM 2: Porte konumlarını tespit et ──
+        # ADIM 2: Porte konumlarini tespit et
         detect_text, err = ask_gpt(full_b64, DETECT_PROMPT, max_tokens=256)
         if err or not detect_text:
-            return jsonify({"success": False, "error": "Porte tespiti başarısız: " + (err or "boş yanıt")})
+            return jsonify({"success": False, "error": "Porte tespiti basarisiz: " + (err or "bos yanit")})
 
-        count_match = re.search(r'COUNT:\s*(\d+)', detect_text)
+        count_match = re.search(r"COUNT:\s*(\d+)", detect_text)
         count = int(count_match.group(1)) if count_match else 4
-        count = min(count, 10)  # maksimum 10 porte
+        count = min(count, 10)
 
         rows = []
         for i in range(1, count + 1):
-            row_match = re.search(rf'ROW{i}:\s*(\d+)\s+(\d+)', detect_text)
+            row_match = re.search(rf"ROW{i}:\s*(\d+)\s+(\d+)", detect_text)
             if row_match:
-                rows.append({'top': int(row_match.group(1)), 'bottom': int(row_match.group(2))})
+                rows.append({"top": int(row_match.group(1)), "bottom": int(row_match.group(2))})
             else:
                 rows.append({
-                    'top': round((i - 1) * 100 / count),
-                    'bottom': round(i * 100 / count)
+                    "top": round((i - 1) * 100 / count),
+                    "bottom": round(i * 100 / count)
                 })
 
-        # ── ADIM 3: Her porteyi crop et + iyileştir + GPT'ye gönder ──
+        # ADIM 3: Her porteyi crop et + iyilestir + GPT'ye gonder
         all_notes = []
         all_staves = []
         raw_parts = []
@@ -264,21 +234,17 @@ def process_sheet():
 
         for i, row in enumerate(rows):
             try:
-                # Gerçek crop
-                cropped = crop_staff(img, row['top'], row['bottom'])
-
-                # Crop'u iyileştir
+                cropped = crop_staff(img, row["top"], row["bottom"])
                 cropped_enhanced = enhance_crop(cropped)
                 cropped_b64 = pil_to_b64(cropped_enhanced, quality=95)
 
-                # GPT'ye gönder
                 row_text, err = ask_gpt(cropped_b64, read_prompt(i + 1), max_tokens=2048)
 
                 if err:
                     errors.append(f"Porte {i+1}: {err}")
                     continue
                 if not row_text:
-                    errors.append(f"Porte {i+1}: boş yanıt")
+                    errors.append(f"Porte {i+1}: bos yanit")
                     continue
 
                 raw_parts.append(row_text)
@@ -288,15 +254,15 @@ def process_sheet():
                     all_notes.extend(notes)
                     all_staves.append({"index": i, "noteCount": len(notes)})
                 else:
-                    errors.append(f"Porte {i+1}: nota parse edilemedi ({row_text[:80]})")
+                    errors.append(f"Porte {i+1}: parse edilemedi -> {row_text[:80]}")
 
             except Exception as e:
-                errors.append(f"Porte {i+1} hatası: {str(e)}")
+                errors.append(f"Porte {i+1} hatasi: {str(e)}")
 
         if not all_notes:
             return jsonify({
                 "success": False,
-                "error": "Nota bulunamadı.",
+                "error": "Nota bulunamadi.",
                 "debug": {
                     "detect": detect_text,
                     "rows": rows,
@@ -323,12 +289,12 @@ def process_sheet():
         })
 
     except Exception as e:
-        return jsonify({"success": False, "error": "Sunucu hatası: " + str(e)}), 500
+        return jsonify({"success": False, "error": "Sunucu hatasi: " + str(e)}), 500
 
 
 @app.route('/generate-pdf', methods=['POST'])
 def generate_pdf_endpoint():
-    return jsonify({"success": False, "error": "PDF özelliği yakında eklenecek."}), 501
+    return jsonify({"success": False, "error": "PDF ozelligi yakinda eklenecek."}), 501
 
 
 if __name__ == '__main__':
